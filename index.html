@@ -284,6 +284,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           const ms = u.members.filter((p) => donors.includes(p));
           if (ms.length === 2 && ms.every((p) => p.chair) && ms.map((p) => p.gender).sort().join() === '女,男') couples.set(ms.find((p) => p.gender === '男'), ms.find((p) => p.gender === '女'));
         });
+        // 會長（全場只有一位，不分男女眾）要椅子 → 坐東單椅子首位；緊接著坐第一位要椅子的男眾副會長
+        const chief = donors.find((p) => p.chair && p.title === '會長');
+        if (chief) { // 會長若是夫妻中的一位，夫妻一起坐，會長在前
+          for (const [k, v] of [...couples]) if (v === chief) { couples.delete(k); couples.set(chief, k); }
+        }
+        const vice = chief ? donors.find((p) => p !== chief && p.chair && p.title === '副會長' && p.gender === '男' && couples.get(chief) !== p) : null;
         const wives = new Set(couples.values());
         // 依次第：男眾、夫妻、（西單椅子坐滿後）溢出的女眾，依序坐東單椅子；男女不同排（夫妻除外），寧願空位
         let westLeft = west.length;
@@ -291,10 +297,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         donors.forEach((p) => {
           if (!p.chair || wives.has(p)) return;
           if (couples.has(p)) seq.push({ p, mate: couples.get(p), cls: 'M' });
-          else if (p.gender === '男') seq.push({ p, cls: 'M' });
+          else if (p.gender === '男' || p === chief) seq.push({ p, cls: 'M' });
           else if (westLeft > 0) westLeft--;
           else seq.push({ p, cls: 'F' });
         });
+        [vice, chief].forEach((x) => { const i = seq.findIndex((it) => it.p === x); if (x && i > 0) seq.unshift(seq.splice(i, 1)[0]); }); // 先放副會長，再把會長放到最前面 → 會長、副會長、其餘
         let idx = 0, curRow = -1, curCls = '';
         seq.forEach((it) => {
           if (curCls && it.cls !== curCls) { while (idx < east.length && east[idx].row === curRow) idx++; }
@@ -669,8 +676,10 @@ const kinNoSeat = (r) => !!r.kinOf && r.duty === '關照親眷' && !r.proxyFor &
 function volCode(r) { return r.seatOnly ? '先行' : !r.vol ? (kinNoSeat(r) ? '親眷' : '') : r.mode === '事前供燈' ? '先行' : r.mode === '代供' ? '代供' : '隨波'; }
 const MODES = ['上台供燈', '事前供燈', '代供', '不供燈'];
 const isUp = (r) => !r.noLamp && !r.seatOnly && !(r.vol && r.mode !== '上台供燈');
+/* 備註欄的職稱：全場只有一位「會長」，另有多位「副會長」（排座位用） */
+const seatTitle = (note) => { const k = String(note || '').split(/[\s、,，;；]+/).filter(Boolean); return k.includes('會長') ? '會長' : k.includes('副會長') ? '副會長' : ''; };
 function toPerson(r, extra) {
-  return Object.assign({ name: r.name, category: r.category, gender: r.gender, chair: !!r.chair, kinOf: r.selfLamp ? '' : r.kinOf || '', selfLamp: !!r.selfLamp, nw: !!r.nw, er: !!r.er, noLamp: !r.selfLamp && (!!r.noLamp || (!!r.vol && r.mode === '不供燈')), volunteer: volCode(r), seatAnyway: r.vol === '義工入座' || !!r.seatKin || !!r.seatOnly, seatOnly: !!r.seatOnly, kin: [], rel: r.rel || '', note: r.note || '', vol: r.vol, mode: r.mode, proxy: r.proxy }, extra || {});
+  return Object.assign({ name: r.name, title: r.title || seatTitle(r.note), category: r.category, gender: r.gender, chair: !!r.chair, kinOf: r.selfLamp ? '' : r.kinOf || '', selfLamp: !!r.selfLamp, nw: !!r.nw, er: !!r.er, noLamp: !r.selfLamp && (!!r.noLamp || (!!r.vol && r.mode === '不供燈')), volunteer: volCode(r), seatAnyway: r.vol === '義工入座' || !!r.seatKin || !!r.seatOnly, seatOnly: !!r.seatOnly, kin: [], rel: r.rel || '', note: r.note || '', vol: r.vol, mode: r.mode, proxy: r.proxy }, extra || {});
 }
 /* roster → step-3 rows (auto order + waves) */
 function autoPlan() {
@@ -699,7 +708,7 @@ function autoPlan() {
   const ordOf = {}; att.forEach((x, ix) => { ordOf[x.name] = ix; });
   S.rows = [];
   prep.units.forEach((u) => u.members.forEach((m, i) => {
-    S.rows.push({ name: m.name, category: u.head.category, attached: i > 0, gender: m.gender || (S.edits[m.name] || {}).gender || '', chair: m.chair || (S.edits[m.name] || {}).chair || false, vol: m.vol || '', seatOnly: !!m.seatOnly, nw: !!m.nw, er: !!m.er, mode: m.mode || '', proxy: m.proxy || '', wave: m.wave || null, auto: !!m.auto, noLamp: !!m.noLamp, duty: m.duty || '', companion: false, kinOf: m.kinOf || '', seatKin: !!(S.kinSeat || {})[m.name], ord: (ordOf[m.kinOf || m.name] ?? 9999), note: (att.find((x) => x.name === m.name) || {}).note || '' });
+    S.rows.push({ name: m.name, category: u.head.category, attached: i > 0, gender: m.gender || (S.edits[m.name] || {}).gender || '', chair: m.chair || (S.edits[m.name] || {}).chair || false, vol: m.vol || '', seatOnly: !!m.seatOnly, nw: !!m.nw, er: !!m.er, mode: m.mode || '', proxy: m.proxy || '', wave: m.wave || null, auto: !!m.auto, noLamp: !!m.noLamp, duty: m.duty || '', companion: false, kinOf: m.kinOf || '', seatKin: !!(S.kinSeat || {})[m.name], ord: (ordOf[m.kinOf || m.name] ?? 9999), note: (att.find((x) => x.name === m.name) || {}).note || '', title: seatTitle((att.find((x) => x.name === m.name) || {}).notes) });
   }));
   S.autoWarnings = prep.warnings;
   syncProxies();

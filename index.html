@@ -189,13 +189,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     units.forEach((u) => {
       const h = u.head;
       if (/伉儷/.test(h.note || '') && u.members.length === 1 && !h.noAutoSpouse) {
-        u.members.push({ name: h.name + '同修', category: h.category, gender: h.gender === '男' ? '女' : h.gender === '女' ? '男' : '', chair: h.chair, volunteer: '', orig: h.orig, auto: true });
+        u.members.push({ name: h.name + '同修', category: h.category, gender: h.gender === '男' ? '女' : h.gender === '女' ? '男' : '', chair: false, volunteer: '', orig: h.orig, auto: true });
         if (!h.gender) warnings.push(`「${h.name}」備註伉儷但沒有性別，同修性別未知`);
       }
       (h.kin || []).forEach((k) => {
         if (!names.has(k)) {
           names.add(k);
-          u.members.push({ name: k, category: h.category, gender: '', chair: h.chair, kinOf: h.name, volunteer: '', orig: h.orig, duty: '關照親眷', noLamp: h.proxy !== k });
+          u.members.push({ name: k, category: h.category, gender: '', chair: false, kinOf: h.name, volunteer: '', orig: h.orig, duty: '關照親眷', noLamp: h.proxy !== k });
         }
       });
     });
@@ -266,8 +266,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     (reps || []).forEach((p) => { p.volunteer = ''; members.push(p); }); // 代表排在功德主之後
     const isKin = (p) => !!(p.kinOf && p.noLamp);
     const donors = members.filter((p) => !isKin(p)), kins = members.filter(isKin);
-    // 夫妻（一戶兩人、一男一女、其中有人坐椅子）：兩人都當椅子，坐在一起
-    units.forEach((u) => { const ms = u.members.filter((p) => donors.includes(p)); if (ms.length === 2 && ms.map((p) => p.gender).sort().join() === '女,男' && ms.some((p) => p.chair)) ms.forEach((p) => { p.chair = true; }); });
+    // 夫妻（一戶兩人、一男一女）：只有「兩人都要椅子」才綁在一起坐東單椅子；一人要椅子、一人不要，就各排各的（見下方 couples）
     const groupOf = (p) => (p.chair ? 'chair' : 'cushion');
     const types = { chair: rules.chairTypes, cushion: rules.cushionTypes };
     const lists = {};
@@ -634,9 +633,31 @@ function applyRegistration() {
       if (pi < 0) continue;
       let at = pi + 1; while (at < S.roster.length && !S.roster[at].seq && S.roster[at].attend) at++;
       const q = S.roster[pi];
-      S.roster.splice(at, 0, { seq: '', name: x.name, category: '', gender: q.gender === '女' ? '男' : q.gender === '男' ? '女' : '', chair: !!q.chair, note: '', notes: '', kin: [], seatwith: '', attend: true });
+      S.roster.splice(at, 0, { seq: '', name: x.name, category: '', gender: q.gender === '女' ? '男' : q.gender === '男' ? '女' : '', chair: false, note: '', notes: '', kin: [], seatwith: '', attend: true });
       S.regByName[x.name] = x; matched.add(x.name); unmatched.splice(ui, 1);
     }
+  }
+  // 關聯親眷括號裡寫了義工執事（例如「胡維桓(學員·司儀)」）→ 那位親眷就是義工：不排座位、依執事決定供燈方式；不在功德主名單的，就補一列跟在這位功德主後面
+  if (R.structured) {
+    const known = new Set(['司儀', '心燈', '助唱', '照客', '攝影', '錄影', '攝像', '資料文書組', '執秘', '音響視訊', '總指揮', '副總指揮', '義工']);
+    R.rows.forEach((x) => { if (x.duty && x.duty !== '義工') known.add(x.duty); });
+    const dutyOfTag = (tag) => String(tag || '').split(/[·．.、\/,，\s+＋]+/).filter((w) => w && [...known].some((d) => w === d || w.includes(d))).join('、');
+    R.rows.forEach((x) => {
+      if (!x.reg) return;
+      parseKin(x.kin).forEach((k) => {
+        const d = dutyOfTag(k.tag);
+        if (!d || k.name === x.name) return;
+        const had = S.regByName[k.name];
+        if (had) { if (!had.duty) S.regByName[k.name] = Object.assign({}, had, { duty: d }); return; }
+        const pi = S.roster.findIndex((q) => q.name === x.name && matched.has(q.name));
+        if (names.has(k.name)) { if (matched.has(k.name)) S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '' }; return; }
+        if (pi < 0) return;
+        let at = pi + 1; while (at < S.roster.length && !S.roster[at].seq && S.roster[at].attend) at++;
+        const q = S.roster[pi];
+        S.roster.splice(at, 0, { seq: '', name: k.name, category: '', gender: q.gender === '女' ? '男' : q.gender === '男' ? '女' : '', chair: false, note: '', notes: '', kin: [], seatwith: '', attend: true });
+        S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '' }; matched.add(k.name); names.add(k.name);
+      });
+    });
   }
   setAttendance(matched);
   const duties = []; if (R.structured) R.rows.forEach((x) => { if (x.reg && x.duty) duties.push(x); });

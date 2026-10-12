@@ -1150,7 +1150,7 @@ async function exportOrder() {
   S.rows.filter((r) => !(r.kinOf && r.noLamp && r.duty === '關照親眷' && !r.proxyFor && !r.selfLamp)).forEach((r, i) => ws.addRow([i + 1, r.wave || '', r.attached ? '' : r.category, r.name, r.gender, r.chair ? 'v' : '', r.vol, r.mode, r.proxy, [r.duty, r.er && !/二壇/.test(r.duty || '') ? '二壇' : '', r.selfLamp || r.seatOnly ? '自行供燈（需備燈）、不唱名、不胸花' : r.noLamp ? '不上台供燈' : ''].filter(Boolean).join('、') || r.note || '']));
   [6, 7, 16, 14, 7, 9, 10, 11, 12, 30].forEach((w, i) => (ws.getColumn(i + 1).width = w));
   ws.views = [{ state: 'frozen', ySplit: 3 }];
-  saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${S.event || ''}供燈順序表.xlsx`);
+  saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${fileBase()}供燈順序表.xlsx`);
 }
 async function importOrder(file) {
   const wb = await readWb(file), ws = wb.getWorksheet('供燈順序表') || wb.worksheets[0];
@@ -1306,10 +1306,12 @@ function step5() {
   $('#main').innerHTML = `<div class="panel">
     <h2>第 5 步：下載結果</h2>
     <p class="how">下載一份 Excel，裡面有：供燈排序表、總座位圖、公告座位圖、給心燈版。貼回你自己維護的 Excel 即可。</p>
-    <div class="row"><button class="primary" id="dlx">下載 Excel（${esc(S.event || '本場')} 全部）</button><button id="dlo">只下載供燈順序表（可改後再匯入）</button></div>
+    <div class="row"><label>供燈排序表的表頭 <input type="text" id="hdr" value="${esc(orderHdr())}" size="14"> ${ORDER_TAIL}</label> <span class="hint">（例如：1151019晚場）</span></div>
+    <div class="row"><button class="primary" id="dlx">下載 Excel（${esc(fileBase())} 全部）</button><button id="dlo">只下載供燈順序表（可改後再匯入）</button></div>
     <div class="note warn">關掉或重新整理頁面會清掉所有資料，下載後再離開。</div>
     <div class="nav"><div><button id="bk">← 回上一步調整</button></div><div></div></div>
   </div>`;
+  $('#hdr').oninput = (e) => { S.hdr = e.target.value.trim(); $('#dlx').textContent = `下載 Excel（${fileBase()} 全部）`; };
   $('#dlx').onclick = buildOutput;
   $('#dlo').onclick = exportOrder;
   $('#bk').onclick = () => go(4);
@@ -1515,6 +1517,16 @@ function decorateField(ws, seats, frame) {
     ws.views = [Object.assign({}, (ws.views && ws.views[0]) || {}, { showGridLines: false })];
   } catch (e) { console.warn('decorateField', e); }
 }
+/* 供燈排序表第一列的「表頭」：前面的文字（預設 115＋本場名稱）可在第 5 步改，例如 1151019晚場 */
+const ORDER_TAIL = '共修法會出席功德主供燈排序名單';
+const fileBase = () => (orderHdr() || '本場').replace(/[\\/:*?"<>|]/g, '');
+const orderHdr = () => (S.hdr != null ? S.hdr : '115' + (S.event || ''));
+function setOrderTitle(ws) {
+  const c = ws.getCell('A1'), v = typeof c.value === 'string' ? c.value : '';
+  const i = v.indexOf(ORDER_TAIL);
+  if (i < 0 && v) return; // 不是標準表頭（使用者自己改過格式）就不動
+  c.value = orderHdr() + ORDER_TAIL;
+}
 function cleanSheet(ws) {
   const ev = S.event || '';
   const isOrd = /供燈排序表/.test(ws.name);
@@ -1621,7 +1633,7 @@ async function buildFromTemplate() {
   if (found.length >= 2) { // 樣板模式：每張座位圖用自己的座位位置填
     S.orderInfo = null;
     const ow = wb.worksheets.find((w) => /供燈排序表/.test(w.name) && !/_未定$/.test(w.name)) || wb.worksheets.find((w) => /供燈排序表/.test(w.name));
-    if (ow) { if (/ＭＭＤＤ|MMDD/.test(ow.name)) ow.name = ow.name.replace(/ＭＭＤＤ|MMDD/, S.event || ''); fillOrderSheet(ow); cleanSheet(ow); orderDone = true; S.orderInfo.hdr = (() => { for (let r = 1; r <= 12; r++) if (/^發心項目的人數/.test(cv(ow.getCell('H' + r)).trim())) return r; return 0; })(); }
+    if (ow) { if (/ＭＭＤＤ|MMDD/.test(ow.name)) ow.name = ow.name.replace(/ＭＭＤＤ|MMDD/, S.event || ''); fillOrderSheet(ow); cleanSheet(ow); setOrderTitle(ow); orderDone = true; S.orderInfo.hdr = (() => { for (let r = 1; r <= 12; r++) if (/^發心項目的人數/.test(cv(ow.getCell('H' + r)).trim())) return r; return 0; })(); }
     found.forEach(({ ws, mode }) => { const seats = parseLayoutSheet(ws); fillSeats(ws, mode, seats); fillSidePanels(ws, mode); cleanSheet(ws); decorateField(ws, seats, mode === 'total' || mode === 'notice'); keep.push(ws); });
     if (ow) keep.unshift(ow);
   } else { // 只有一張佈場圖：複製成三張
@@ -1682,7 +1694,7 @@ function addChartSheetPlain(wb, title, mode) {
 }
 function addOrderSheet(wb) {
   const ws = wb.addWorksheet('供燈排序表');
-  ws.addRow([`${S.event || ''} 共修法會出席功德主供燈排序名單`]); ws.getCell('A1').font = { bold: true, size: 14 };
+  ws.addRow([orderHdr() + ORDER_TAIL]); ws.getCell('A1').font = { bold: true, size: 14 };
   const h = ws.addRow(['NO', '功德項目', '功德主', '備註', '供燈順序']); h.font = { bold: true };
   h.eachCell((c) => (c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1E6D6' } }));
   let prev = null, n = 0;
@@ -1714,7 +1726,7 @@ async function buildOutput() {
     wb = new ExcelJS.Workbook(); addOrderSheet(wb);
     addChartSheetPlain(wb, '總座位圖', 'total'); addChartSheetPlain(wb, '公告座位圖', 'notice'); addChartSheetPlain(wb, '給心燈版', 'heart');
   }
-  saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${S.event || ''}排位結果.xlsx`);
+  saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${fileBase()}排位結果.xlsx`);
 }
 
 
@@ -1781,7 +1793,7 @@ function step6() {
   $('#cp1').onclick = () => copy(list.map((x) => x.name + '\t' + x.seat).join('\n'));
   $('#cp2').onclick = () => copy(list.map((x) => x.seat).join('\n'));
   $('#cp3').onclick = () => { const by = new Map(list.map((x) => [x.name, x.seat])); copy(($('#co').value || '').split(/\r?\n/).map((n) => (n.trim() ? by.get(n.trim()) || '查無座位' : '')).join('\n')); };
-  $('#cdl').onclick = async () => { const wb = new ExcelJS.Workbook(); addSeatTableSheet(wb, list); saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${S.event || ''}座位對照表.xlsx`); };
+  $('#cdl').onclick = async () => { const wb = new ExcelJS.Workbook(); addSeatTableSheet(wb, list); saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${fileBase()}座位對照表.xlsx`); };
   load();
 }
 function addSeatTableSheet(wb, list) {

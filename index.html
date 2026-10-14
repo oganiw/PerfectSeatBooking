@@ -69,6 +69,7 @@ td select{max-width:120px}
 .seat.sel{outline:3px solid #d33}
 .seat.dg{opacity:.4}.seat.ov{outline:3px dashed #2a7;outline-offset:-2px}
 .seat[draggable=true]{cursor:grab}
+.mchip{display:inline-block;padding:6px 14px;border-radius:8px;background:#e6edf7;border:1px dashed #6a86b8;color:#234;font-weight:700;cursor:grab;user-select:none;margin-right:10px}
 .swhint{margin:8px 0;padding:8px 12px;border-radius:6px;background:#fff8dc;border:1px solid #e6c96b;font-size:14px}
 .swhint.on{background:#ffe9e9;border-color:#d33;font-weight:700}
 .seat.res{opacity:.55;cursor:grab}
@@ -421,7 +422,7 @@ const S = {
   step: 1, maxStep: 1,
   files: [], rosterOpts: [], layoutOpts: [], repsOpts: [],
   rosterKey: '', layoutKey: '',
-  roster: [], extras: [], event: '', follow: true,
+  roster: [], extras: [], event: '', follow: false,
   cfg: { order: DEFAULT_ORDER.slice(), cap1: 1, waveDefault: 4, cut: ['中台總功德主', '中台副總功德主', '精舍總功德主'] },
   edits: {}, marks: {},
   rows: [], assign: null, seatLayout: null, warnings: [], unseated: [], sel: null, view: 'total', tool: 'swap', regInfo: '', companions: {},
@@ -707,6 +708,7 @@ function applyRegistration() {
   const duties = []; if (R.structured) rowsD.forEach((x) => { if (x.reg && x.duty) duties.push(x); });
   S.regInfo = { repAdded, duties, viaKin: Object.keys(S.viaKin).length, matched: matched.size, unmatched, mode: R.structured ? '依「姓名」欄，只取「是否報名」打 V 的人' : '整份檔案掃描比對' };
 }
+const regLoaded = () => !!(S.regCells && S.regCells.structured && S.regByName && Object.keys(S.regByName).length);
 function setAttendance(matched) {
   S.roster.forEach((r) => (r.attend = matched.has(r.name)));
   if (S.follow) {
@@ -764,6 +766,7 @@ function noteEr(r) {
   return { self, kinEr };
 }
 /* roster → step-3 rows (auto order + waves) */
+/* 有報名名單時，誰有來以報名名單為準，不自動多補同修（regLoaded） */
 function autoPlan() {
   S.noteKinEr = {};
   const att = S.roster; 
@@ -785,7 +788,7 @@ function autoPlan() {
     const auto = duty ? { vol: '義工', nw: mode0 === '事前供燈', er: /二壇/.test(duty) || ne.self, mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' }
       : ne.self ? { vol: '義工', nw: false, er: true, mode: '上台供燈', proxy: '' }
       : (/備燈/.test(r.notes || '') && /(不唱名|不胸花|不隨(功德)?波次)/.test(r.notes || '')) ? { seatOnly: true, vol: '', mode: '', proxy: '' } : {}; // 備註寫「要排位子、備燈／不唱名、不隨功德波次、不胸花」＝自行供燈入座
-    const p = toPerson(Object.assign({}, r, auto, ed), { category: r.category || (r.seq ? '' : lastHead), attached, noAutoSpouse: !!(nxt && !nxt.seq) || !r.seq || !!(S.noSpouse || {})[r.name], kin, duty });
+    const p = toPerson(Object.assign({}, r, auto, ed), { category: r.category || (r.seq ? '' : lastHead), attached, noAutoSpouse: !!(nxt && !nxt.seq) || !r.seq || !!(S.noSpouse || {})[r.name] || regLoaded(), kin, duty });
     if (p.vol && !p.mode) p.mode = '上台供燈';
     people.push(p);
   });
@@ -999,7 +1002,7 @@ function step2() {
     <h2>第 2 步：確認本場出席</h2>
     <p class="how">已依第 ② 個檔案勾好出席。可以在這裡手動增減；也可以直接貼姓名清單（一行一位）。需要關照的親眷，只要在名單裡勾起來就會一起排。</p>
     <div class="row"><label>本場名稱 <input type="text" id="ev" value="${esc(S.event)}" placeholder="例如 1018" size="10"></label>
-      <label><input type="checkbox" id="fl" ${S.follow ? 'checked' : ''}> 席次空白的同戶列（伉儷、眷屬）跟著功德主一起出席</label></div>
+      <label><input type="checkbox" id="fl" ${S.follow ? 'checked' : ''}> 席次空白的同戶列（伉儷、眷屬）也一起算出席（有報名名單時請不要勾，以報名名單為準）</label></div>
     <details class="row"><summary>貼上姓名清單</summary>
       <textarea id="paste" placeholder="貼上姓名，一行一位"></textarea>
       <div class="row"><button id="ap">套用（取代目前勾選）</button><button id="clr">清除全部勾選</button></div><div id="pr"></div></details>
@@ -1021,7 +1024,21 @@ function step2() {
     $('#tb').querySelectorAll('select[data-g]').forEach((sl) => sl.onchange = () => { const r = S.roster[+sl.dataset.g]; r.gender = sl.value; (S.edits[r.name] = S.edits[r.name] || {}).gender = sl.value; S.rows = []; S.assign = null; drawRoster(); });
     $('#tb').querySelectorAll('input[type=checkbox]').forEach((c) => c.onchange = () => { S.roster[+c.dataset.i].attend = c.checked; S.rows = []; S.assign = null; count(); });
   };
-  const count = () => { const n = S.roster.filter((r) => r.attend).length; $('#cnt').textContent = `名單共 ${S.roster.length} 筆，本場出席 ${n} 位。`; const nx = $('#nx'); if (nx) nx.disabled = !(n > 0); };
+  const count = () => {
+    const n = S.roster.filter((r) => r.attend).length;
+    // 有報名名單：勾選出席的人要剛好是報名的人（或關聯親眷判定有來的）。多勾、漏勾都列出名字（手動勾選或取消後也會提醒）
+    let tail = '', warn = false;
+    if (regLoaded()) {
+      const ok = (nm) => !!S.regByName[nm] || !!(S.viaKin || {})[nm];
+      const extra = S.roster.filter((r) => r.attend && !ok(r.name)).map((r) => r.name);
+      const miss = S.roster.filter((r) => !r.attend && S.regByName[r.name]).map((r) => r.name);
+      warn = !!(extra.length || miss.length);
+      tail = warn ? `　⚠ ` + (extra.length ? `有勾選但報名名單沒有：${extra.join('、')}。` : '') + (miss.length ? `報名了但沒勾選：${miss.join('、')}。` : '') : '　✓ 和報名名單一致';
+    }
+    $('#cnt').className = 'note ' + (warn ? 'warn' : 'ok');
+    $('#cnt').textContent = `名單共 ${S.roster.length} 筆，本場出席 ${n} 位。` + tail;
+    const nx = $('#nx'); if (nx) nx.disabled = !(n > 0);
+  };
   $('#q').oninput = drawRoster;
   $('#ap').onclick = () => {
     const names = $('#paste').value.split(/[\r\n,，、\t]+/).map((s) => s.replace(/\s/g, '')).filter(Boolean);
@@ -1307,14 +1324,12 @@ function autoReserveMale(layout, assign) {
   const rowsAfter = (side, type, after) => { const g = {}; layout.filter((x) => x.side === side && x.type === type && x.row > after).forEach((x) => { (g[x.row] = g[x.row] || { side, row: x.row, seats: [] }).seats.push(x); }); return Object.values(g).sort((p, q) => p.row - q.row); };
   const ok = (g) => g.seats.every((x) => !assign[x.code] && !S.marks[x.code] && !touched[x.code]);
   const take = (gs, n) => { const got = []; for (const g of gs) { if (got.length >= n || !ok(g)) break; g.seats.forEach((x) => { S.marks[x.code] = '男眾座位區'; S.autoMarks[x.code] = 1; x.reserved = true; }); got.push(g.side + g.row); } return got; };
-  const parts = [];
-  ['東', '西'].forEach((side) => {
-    const bl = rowsAfter(side, '黑靠背椅', lastOcc(side));
-    if (bl.length || layout.some((x) => x.side === side && x.type === '黑靠背椅')) { const g = take(bl, 2); parts.push(g.length === 2 ? `黑椅區緊接在有人坐的最後一排後面 2 排（${g.join('、')}）` : g.length ? `黑椅區後面空排不夠，只標了 ${g.length} 排（${g.join('、')}）` : '黑椅區後面沒有整排空的，沒有標'); }
-  });
-  const wl = rowsAfter('西', '拜墊', lastOcc('西'));
-  if (layout.some((x) => x.side === '西' && x.type === '拜墊')) { const g = take(wl, 1); parts.push(g.length ? `西邊緊接 1 排紫拜墊（${g.join('、')}）` : '西邊紫拜墊後面沒有整排空的，沒有標'); }
-  return parts.length ? '已自動標成「男眾座位區」：' + parts.join('；') + '。可以在「對調座位」模式直接點選／拖曳來移動，也可在「標記空位」改掉。' : '';
+  // 預設只留「一排」：優先東單黑椅（緊接最後有人坐的那排後面第一個整排空的），東邊沒有就留西邊紫拜墊。要多留，請用上方的「＋男眾座位」拖到座位上
+  let got = [], where = '';
+  const be = rowsAfter('東', '黑靠背椅', lastOcc('東'));
+  if (be.length) { got = take(be, 1); where = '東單黑椅'; }
+  if (!got.length) { const wl = rowsAfter('西', '拜墊', lastOcc('西')); if (wl.length) { got = take(wl, 1); where = '西邊紫拜墊'; } }
+  return got.length ? `已預設留 1 排「男眾座位區」：${where}（${got.join('、')}）。要多留，把座位圖上方的「＋男眾座位」拖到空座位上；把男眾座位拖出座位圖＝刪除。` : '';
 }
 function step4() {
   if (!S.layoutOpts.length) { go(1); return; }
@@ -1333,12 +1348,16 @@ function step4() {
     <div id="wn"></div>
     <div class="legend">${Object.entries(TYPE_COLOR).map(([k, v]) => `<span style="background:${v}">${k}</span>`).join('')}<span style="background:#fff">其他</span></div>
     <div class="tabs" id="tabs"></div>
+    <div class="row" style="align-items:center"><span class="mchip" id="mchip" draggable="true" title="按住拖到空座位上，那一格就變成男眾座位區">＋ 男眾座位</span><span class="hint">按住拖到空座位＝加 1 個男眾座位區；把已標的男眾座位拖出座位圖外面＝刪除</span></div>
     <div class="chart" id="chart"></div>
     ${nav(true, '下一步：下載結果', true)}
   </div>`;
   $('#lay').onchange = (e) => { S.layoutKey = e.target.value; S.assign = null; step4(); };
   document.querySelectorAll('input[name=tool]').forEach((r) => r.onchange = () => { S.tool = r.value; S.sel = null; drawChart(); });
   $('#rr').onclick = () => { S.assign = null; step4(); };
+  const chip = $('#mchip');
+  chip.ondragstart = (e) => { S.dragNew = true; S.drag = null; try { e.dataTransfer.setData('text/plain', 'new-male'); e.dataTransfer.effectAllowed = 'copy'; } catch (x) {} };
+  chip.ondragend = () => { S.dragNew = false; document.querySelectorAll('.seat.ov').forEach((x) => x.classList.remove('ov')); };
   drawWarn(); drawTabs(); drawChart();
   bindNav(() => go(3), () => go(5));
 }
@@ -1403,6 +1422,10 @@ function drawChart() {
       el.ondragleave = () => el.classList.remove('ov');
       el.ondrop = (e) => { e.preventDefault(); if (S.drag && S.drag !== code) { const f = S.drag; S.drag = null; swapSeats(f, code); } };
     }
+    // 「＋男眾座位」拖進來：只能放在沒有人坐的座位（對調／標記模式都可以）
+    const od = el.ondragover, ol = el.ondrop;
+    el.ondragover = (e) => { if (S.dragNew) { if (!S.assign[code]) { e.preventDefault(); el.classList.add('ov'); } return; } if (od) od(e); };
+    el.ondrop = (e) => { if (S.dragNew) { e.preventDefault(); S.dragNew = false; el.classList.remove('ov'); if (S.assign[code]) return; if (S.marks[code] !== '男眾座位區') setMark(code, '男眾座位區'); S.sel = null; drawChart(); return; } if (ol) ol(e); };
   });
   const hb = $('#swh');
   if (hb) {
@@ -1410,6 +1433,16 @@ function drawChart() {
     else if (S.sel) { hb.className = 'swhint on'; const a = S.assign[S.sel]; hb.textContent = `已選 ${a ? a.name : S.marks[S.sel] || ''}（${S.sel}）→ 現在請點另一個座位：有人＝兩人對調，空位＝移過去${a ? '' : '（標記會搬到那一格）'}。再點同一格＝取消。`; }
     else { hb.className = 'swhint'; hb.innerHTML = '💡 <b>換座位兩種方法：</b>①先點有人的座位，再點要換的座位（對方有人＝對調，空位＝移過去）　②直接用滑鼠把座位框拖到別的座位上放開。'; }
   }
+}
+/* 把男眾座位區的標記拖出座位圖外面放開＝刪除 */
+if (!window._maleDropBound) {
+  window._maleDropBound = true;
+  document.addEventListener('dragover', (e) => { if (S.drag && S.marks && S.marks[S.drag] === '男眾座位區') e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    const code = S.drag; if (!code || !S.marks || S.marks[code] !== '男眾座位區') return;
+    if (e.target && e.target.closest && e.target.closest('#chart')) return; // 放在座位圖裡面：交給座位自己處理
+    e.preventDefault(); S.drag = null; setMark(code, ''); S.sel = null; drawChart();
+  });
 }
 function setMark(code, v) { if (v) S.marks[code] = v; else delete S.marks[code]; const ly = S.seatLayout.find((x) => x.code === code); if (ly) ly.reserved = !!v; (S.touched = S.touched || {})[code] = 1; if (S.autoMarks) delete S.autoMarks[code]; }
 /* 對調：人⇄人、人⇄空位、人⇄標記座位、標記座位（男眾座位區／保留）⇄空位或別的座位——標記跟著搬過去 */
@@ -1441,12 +1474,34 @@ function clickSeat(code) {
 }
 
 /* ---------------- step 5 ---------------- */
+/* 下載前核對：本場出席的人 ↔ 供燈排序表的人名（多的、少的都列出來），以及座位有沒有重複 */
+function auditNamesHtml() {
+  const att = S.roster.filter((r) => r.attend).map((r) => r.name);
+  const inSheet = S.rows.filter((r) => !(r.kinOf && r.noLamp && r.duty === '關照親眷' && !r.proxyFor && !r.selfLamp));
+  const sn = inSheet.map((r) => r.name), sset = new Set(sn), aset = new Set(att);
+  const missing = att.filter((n) => !sset.has(n));
+  const extra = inSheet.filter((r) => !aset.has(r.name));
+  const dup = sn.filter((n, i) => sn.indexOf(n) !== i);
+  const seated = Object.values(S.assign || {}).map((a) => a.name), sdup = seated.filter((n, i) => seated.indexOf(n) !== i);
+  const why = (r) => r.proxyFor ? `代供人，代供 ${r.proxyFor}，不另算燈` : r.companion ? `同行供燈，跟 ${r.kinOf} 一起供，不另算燈、不胸花` : r.selfLamp ? `${r.kinOf} 的眷屬自行供燈，算眷屬 1 盞` : r.auto ? '自動補的同修，算一盞' : r.kinOf ? `${r.kinOf} 的眷屬` : '不在出席名單';
+  // 燈數、胸花數（獨立於 Excel 輸出再算一次，下載後可和 Excel 上的表對照）
+  const donorN = inSheet.filter((r) => !r.selfLamp && !r.proxyFor && !r.companion).length, kinLamp = inSheet.filter((r) => r.selfLamp).length, noBadge = inSheet.filter((r) => r.seatOnly && !r.selfLamp).length;
+  const bad = missing.length || dup.length || sdup.length;
+  const lines = [`本場出席 <b>${att.length}</b> 位 → 供燈排序表 <b>${sn.length}</b> 位${!missing.length && !extra.length ? '，名單完全一致 ✓' : ''}`];
+  lines.push(`備燈：功德主 <b>${donorN}</b> 盞 + 眷屬自行供燈 <b>${kinLamp}</b> 盞 = 總備燈 <b>${donorN + kinLamp}</b> 盞；胸花 <b>${donorN - noBadge}</b> 朵${noBadge ? `（${noBadge} 位自行供燈入座不胸花）` : ''}`);
+  if (missing.length) lines.push(`<b style="color:#b00">出席但供燈排序表沒有：${esc(missing.join('、'))}</b>`);
+  if (extra.length) lines.push(`供燈排序表多出的 ${extra.length} 位不是報名／出席名單上的人：${esc(extra.map((r) => r.name + '（' + why(r) + '）').join('、'))}`);
+  if (dup.length) lines.push(`<b style="color:#b00">供燈排序表姓名重複：${esc([...new Set(dup)].join('、'))}</b>`);
+  if (sdup.length) lines.push(`<b style="color:#b00">座位圖上同一個人坐了不只一個位子：${esc([...new Set(sdup)].join('、'))}</b>`);
+  return `<div class="note ${bad ? 'bad' : extra.length ? 'warn' : 'ok'}"><b>下載前核對</b><br>${lines.join('<br>')}</div>`;
+}
 function step5() {
   $('#main').innerHTML = `<div class="panel">
     <h2>第 5 步：下載結果</h2>
     <p class="how">下載一份 Excel，裡面有：供燈排序表、總座位圖、公告座位圖、給心燈版。貼回你自己維護的 Excel 即可。</p>
     <div class="row"><label>供燈排序表的表頭 <input type="text" id="hdr" value="${esc(orderHdr())}" size="14"> ${ORDER_TAIL}</label> <span class="hint">（例如：1151019晚場）</span></div>
     <div class="row"><button class="primary" id="dlx">下載 Excel（${esc(fileBase())} 全部）</button><button id="dlo">只下載供燈順序表（可改後再匯入）</button></div>
+    ${auditNamesHtml()}
     <div class="note warn">關掉或重新整理頁面會清掉所有資料，下載後再離開。</div>
     <div class="nav"><div><button id="bk">← 回上一步調整</button></div><div></div></div>
   </div>`;
@@ -1785,13 +1840,14 @@ function fillOrderSheet(ws) {
     u.forEach((r) => { if (r.selfLamp) kinSelf.push({ r, cat: r.category }); else if (r.seatOnly) sonly.push({ r, cat: r.category }); else if (r.vol && r.mode === '事前供燈') pre.push({ r, cat: r.category }); else if (r.vol && r.mode === '不供燈') none.push({ r, cat: r.category }); else if (r.kinOf && r.noLamp && r.duty === '關照親眷' && !r.proxyFor) { /* 沒代供的親眷不寫進供燈排序表 */ } else keep.push(r); });
     if (keep.length) main.push(keep);
   });
-  let row = 3; const merges = [];
+  let row = 3; const merges = [], rowOf = {};
   let waveRun = null;
   const flushWave = (endRow) => { if (waveRun && endRow > waveRun.start) merges.push(`E${waveRun.start}:E${endRow}`); waveRun = null; };
   main.forEach((u) => {
     const wv = (u.map((x) => x.wave).find((x) => x)) || null, start = row;
     const rems = u.map(orderRemark), coupleMerge = u.length > 1 && rems.every((x) => !x) && /伉儷/.test((S.roster.find((x) => x.name === u[0].name) || {}).note || '');
     u.forEach((r, i) => {
+      rowOf[row] = r;
       ws.getCell('A' + row).value = { formula: 'ROW()-2' };
       ws.getCell('B' + row).value = i === 0 ? u[0].category : null;
       ws.getCell('C' + row).value = r.name;
@@ -1804,6 +1860,7 @@ function fillOrderSheet(ws) {
   });
   flushWave(row - 1);
   const tail = (list, label, kin) => list.forEach(({ r }) => {
+    rowOf[row] = r;
     ws.getCell('A' + row).value = { formula: 'ROW()-2' }; ws.getCell('B' + row).value = kin ? '親眷' : r.category || null; ws.getCell('C' + row).value = r.name;
     ws.getCell('D' + row).value = kin ? `備燈, ${r.kinOf}` : orderRemark(r) || null; ws.getCell('E' + row).value = label; row++;
   });
@@ -1813,7 +1870,8 @@ function fillOrderSheet(ws) {
   for (let r = 3; r <= last; r++) { ws.getRow(r).height = h3; ['A', 'B', 'C', 'D', 'E'].forEach((c) => { ws.getCell(c + r).style = jcl(st[c]); }); }
   for (let r = last + 1; r <= Math.max(60, last + 5); r++) ['A', 'B', 'C', 'D', 'E'].forEach((c) => { const x = ws.getCell(c + r); x.style = {}; });
   // 右側統計兩張表：①供燈（發心項目／功德主人數／眷屬人數／總備燈數）②胸花（發心項目／功德主人數／總數）
-  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (cur && cur !== '親眷') cnt[cur] = (cnt[cur] || 0) + 1; } }
+  // 燈數：每位功德主 1 盞。代供人、「＋」加進來一起供燈的眷屬只是幫功德主供，不另外備燈、不胸花。眷屬代供人（不在功德主名單）只是幫人供，那一盞已算在被代供的人身上，不另外算；眷屬自行供燈的另算在「眷屬」欄
+  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (rowOf[r] && (rowOf[r].proxyFor || rowOf[r].companion)) continue; if (cur && cur !== '親眷') cnt[cur] = (cnt[cur] || 0) + 1; } }
   S.orderInfo = { sheet: ws.name, cnt, rows: [] };
   let hdr = 0; for (let r = 1; r <= 12; r++) if (/^(發心項目的人數|統計發心項目|供燈)/.test(cv(ws.getCell('H' + r)).trim())) { hdr = r; break; }
   if (!hdr) hdr = 2;

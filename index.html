@@ -71,7 +71,7 @@ td select{max-width:120px}
 .seat[draggable=true]{cursor:grab}
 .swhint{margin:8px 0;padding:8px 12px;border-radius:6px;background:#fff8dc;border:1px solid #e6c96b;font-size:14px}
 .swhint.on{background:#ffe9e9;border-color:#d33;font-weight:700}
-.seat.res{opacity:.55;cursor:not-allowed}
+.seat.res{opacity:.55;cursor:grab}
 .rowlbl{width:28px;font-size:11px;color:#888;display:flex;align-items:center;justify-content:center}
 .legend span{display:inline-block;padding:1px 8px;border-radius:4px;margin-right:6px;font-size:12px;border:1px solid #bbb;color:#222}
 ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
@@ -85,6 +85,7 @@ ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
 <header>
   <h1>普圓法會-公關輔助劃位器</h1>
   <div class="sub">依序完成五個步驟。資料只在你的瀏覽器裡處理，不會上傳，也不會儲存；關掉視窗就清空，所以請在最後一步下載結果。</div>
+  <div class="row" style="margin-top:8px;gap:8px"><button id="recsave" title="把你改過的身分、波次、座位位置、男眾座位區存成一個檔，改版或下次可以載回來">💾 儲存調整紀錄</button><button id="recload" title="載入之前存的調整紀錄（要先上傳第 ①②個檔案）">📂 載入調整紀錄</button><input type="file" id="recfile" accept=".json,application/json" style="display:none"><span class="hint" id="recmsg"></span></div>
 </header>
 <div class="steps" id="steps"></div>
 <main id="main"></main>
@@ -275,7 +276,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const free = seats.filter((s) => !s.reserved && types[g].includes(s.type));
       const east = free.filter((s) => s.side === M).sort(plain);
       const west = free.filter((s) => s.side === F).sort(plain);
-      let eastLeft, eastForMen;
+      let eastLeft, eastForMen, lead = null;
       if (g === 'chair') {
         const used = new Set();
         const couples = new Map();
@@ -312,6 +313,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         eastForMen = east.filter((s, i) => used.has(i));
         eastLeft = east.filter((s, i) => !used.has(i));
         eastForMen.forEach((s) => { s.pre = true; });
+        // 人很少、男眾（含會長）只坐滿東單椅子第一排的一部分：緊鄰的空位讓第二位要椅子的女眾坐（第一位仍坐西單最靠中央），不要讓會長旁邊空著
+        if (seq.length && east.length && curRow === east[0].row) lead = eastLeft.find((s) => s.row === curRow) || null;
       } else {
         const men = donors.filter((p) => groupOf(p) === g && p.gender === '男').length;
         eastForMen = east.slice(0, men);
@@ -325,7 +328,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const westM = west.slice().sort(plain);
       lists[g] = {
         male: eastForMen.concat(westM.filter((s) => s.row > lastW), westM.filter((s) => s.row <= lastW)),
-        female: west.concat(eastLeft).sort(rowCmp),
+        female: (g === 'chair' && lead && wN > 1) ? (() => { const fl = west.concat(eastLeft).filter((s) => s !== lead).sort(rowCmp); fl.splice(1, 0, lead); return fl; })() : west.concat(eastLeft).sort(rowCmp), // 次第最高的女眾仍坐靠中央走道的西4-1，第二位才補會長旁邊
       };
     });
     const mates = new Set(); pre.forEach((s, p) => mates.add(p));
@@ -562,6 +565,25 @@ async function useRegSheet(key) {
   if (S.roster.length) applyRegistration();
 }
 /* 本場參加名單：有「姓名」欄就讀整張表（是否報名、義工執事、關聯親眷），否則整份掃描 */
+/* 報名名單裡除了功德主，也可寫醫護、各班代表：整列掃描（欄位標題或儲存格寫「醫護」「日初班代表」「日初代表」都認得） */
+function regRole(cells) {
+  const out = {};
+  cells.forEach(({ h, t }) => {
+    if (/醫護|醫師|護理/.test(t) || (/醫護/.test(h) && !/^(否|無|x|0|n|no|-|—)$/i.test(t))) out.medic = true;
+    const m = t.match(/([日夜][初中高研])班?(?:級)?/);
+    if (/前三/.test(t + h) && /代表/.test(t + h)) { out.top3 = true; if (m) out.klass = m[1] + '班'; }
+    else if (/代表/.test(t) || (/代表|班級|達標/.test(h) && m && !/^(否|無)$/.test(t))) { out.rep = true; if (m) out.klass = m[1] + '班'; }
+  });
+  cells.forEach(({ h, t }) => { if (/點名長/.test(t + h)) { out.roll = true; const m = t.match(/([日夜][初中高研])班?/); if (m) out.klass = m[1] + '班'; } });
+  // 後面寫了男／女（放在哪一欄都可以，例如「功德主」欄）→ 性別
+  cells.forEach(({ t }) => { if (/^(男|男眾|男眾師兄)$/.test(t)) out.gender = '男'; else if (/^(女|女眾|女眾師姐)$/.test(t)) out.gender = '女'; });
+  const g = out.gender || '';
+  if (out.roll) return { kind: '點名長', klass: out.klass || '', gender: g };
+  if (out.medic) return { kind: '醫護', gender: g };
+  if (out.top3) return { kind: '前三班級代表', klass: out.klass || '', gender: g };
+  if (out.rep) return out.klass ? { kind: '班級供燈代表', klass: out.klass, gender: g } : { kind: '其他代表', klass: '', gender: g };
+  return null;
+}
 function collectRegistration(wb, only) {
   const rows = [], all = [];
   let structured = false, hasReg = false;
@@ -592,10 +614,15 @@ function collectRegistration(wb, only) {
     }
     structured = true;
     if (cR || cD) hasReg = true;
+    const colHdr = {}; for (let c = 1; c <= Math.min(ws.columnCount, 30); c++) colHdr[c] = cell(ws, hr, c).replace(/[\s\u3000]/g, '');
     const h = { row: hr };
     for (let r = h.row + 1; r <= ws.rowCount; r++) {
       const name = cell(ws, r, cN).replace(/\s/g, ''); if (!name) continue;
-      rows.push({ name, reg: cR ? /^(v|是|y|1|✓|✔)$/i.test(cell(ws, r, cR)) : true, duty: cD ? ((d) => (/^(v|是|y|1|✓|✔|x)$/i.test(d) ? '義工' : d))(cell(ws, r, cD)) : '', kin: cK ? cell(ws, r, cK) : '' });
+      const cells = []; for (let c = 1; c <= Math.min(ws.columnCount, 30); c++) { if (c === cN || c === cK) continue; const t = cell(ws, r, c).replace(/[\s\u3000]/g, ''); if (t) cells.push({ h: colHdr[c] || '', t }); }
+      const role = regRole(cells);
+      let duty = cD ? ((d) => (/^(v|是|y|1|✓|✔|x)$/i.test(d) ? '義工' : d))(cell(ws, r, cD)) : '';
+      if (role && /(醫護|代表|點名長)/.test(duty)) duty = duty.replace(/[、,，;；\s]*[^、,，;；\s]*(醫護|代表|點名長)[^、,，;；\s]*/g, '').replace(/^[、,，;；]+|[、,，;；]+$/g, '');
+      rows.push({ name, reg: cR ? /^(v|是|y|1|✓|✔)$/i.test(cell(ws, r, cR)) : true, duty, kin: cK ? cell(ws, r, cK) : '', role, neg: !!(cR && /^(否|n|no|x|0|不)$/i.test(cell(ws, r, cR))) });
     }
   });
   return { rows, all, structured, hasReg };
@@ -610,17 +637,20 @@ function applyRegistration() {
   const R = S.regCells, names = new Set(S.roster.map((r) => r.name));
   const matched = new Set(), unmatched = [];
   S.regByName = {};
+  // 標了醫護／代表的那幾列另外處理；同名的功德主列照舊（不被代表那列蓋掉執事）。代表列若沒打「是否報名」V，不算功德主有來
+  const plain = new Set(R.rows.filter((x) => !x.role).map((x) => x.name));
+  const rowsD = R.rows.filter((x) => !x.role || (!plain.has(x.name) && x.reg));
   if (R.structured) {
-    R.rows.forEach((x) => {
+    rowsD.forEach((x) => {
       if (!x.reg) return;
-      if (names.has(x.name)) { matched.add(x.name); S.regByName[x.name] = x; } else unmatched.push(x);
+      if (names.has(x.name)) { matched.add(x.name); S.regByName[x.name] = x; } else if (!x.role) unmatched.push(x);
     });
   } else {
     names.forEach((n) => { if (R.all.some((v) => v === n || (v.length <= n.length + 8 && v.includes(n)))) matched.add(n); });
   }
   // 功德主不一定是學員：他可能是已報名學員的「關聯親眷」。學員有報名、親眷欄寫到這位功德主，就算功德主有來
   S.viaKin = {};
-  if (R.structured) R.rows.forEach((x) => {
+  if (R.structured) rowsD.forEach((x) => {
     if (!x.reg) return;
     parseKin(x.kin).forEach((k) => { if (names.has(k.name) && !matched.has(k.name) && k.name !== x.name) { matched.add(k.name); S.viaKin[k.name] = x.name; } });
   });
@@ -640,9 +670,9 @@ function applyRegistration() {
   // 關聯親眷括號裡寫了義工執事（例如「胡維桓(學員·司儀)」）→ 那位親眷就是義工：不排座位、依執事決定供燈方式；不在功德主名單的，就補一列跟在這位功德主後面
   if (R.structured) {
     const known = new Set(['司儀', '心燈', '助唱', '照客', '攝影', '錄影', '攝像', '資料文書組', '執秘', '音響視訊', '總指揮', '副總指揮', '義工']);
-    R.rows.forEach((x) => { if (x.duty && x.duty !== '義工') known.add(x.duty); });
+    rowsD.forEach((x) => { if (x.duty && x.duty !== '義工') known.add(x.duty); });
     const dutyOfTag = (tag) => String(tag || '').split(/[·．.、\/,，\s+＋]+/).filter((w) => w && [...known].some((d) => w === d || w.includes(d))).join('、');
-    R.rows.forEach((x) => {
+    rowsD.forEach((x) => {
       if (!x.reg) return;
       parseKin(x.kin).forEach((k) => {
         const d = dutyOfTag(k.tag);
@@ -659,9 +689,23 @@ function applyRegistration() {
       });
     });
   }
+  // 報名名單裡標了醫護、各班代表的人：進第 2 步「本場代表與醫護」。同時是功德主的，只排功德主的座位
+  S.regPrev = {}; S.extras.forEach((e) => { if (e.fromReg) S.regPrev[e.name] = { gender: e.gender, chair: e.chair }; });
+  S.extras = S.extras.filter((x) => !x.fromReg);
+  const repAdded = [];
+  if (R.structured) R.rows.forEach((x) => {
+    if (!x.role || x.neg) return;
+    const role = x.role.kind, kl = x.role.klass || '';
+    const ex = S.extras.find((e) => e.name === x.name && e.role === role);
+    if (ex) { if (!ex.gender && x.role.gender) ex.gender = x.role.gender; return; }
+    if (role === '班級供燈代表' && kl) S.extras = S.extras.filter((e) => !(e.fromFile && e.role === role && e.klass === kl)); // 報名名單優先於範本裡的舊代表
+    const prev = (S.regPrev || {})[x.name] || {};
+    const ne = ({ name: x.name, role, klass: kl, gender: (x.role && x.role.gender) || prev.gender || '', chair: !!prev.chair, isDonor: false, vol: role !== '點名長' && !!(x.duty && x.duty !== '醫護'), fromReg: true }); fillFromRoster(ne); S.extras.push(ne);
+    repAdded.push(x.name + '（' + (role === '醫護' ? '醫護' : role === '點名長' ? (kl || '') + '點名長' : (kl || '') + '代表') + '）');
+  });
   setAttendance(matched);
-  const duties = []; if (R.structured) R.rows.forEach((x) => { if (x.reg && x.duty) duties.push(x); });
-  S.regInfo = { duties, viaKin: Object.keys(S.viaKin).length, matched: matched.size, unmatched, mode: R.structured ? '依「姓名」欄，只取「是否報名」打 V 的人' : '整份檔案掃描比對' };
+  const duties = []; if (R.structured) rowsD.forEach((x) => { if (x.reg && x.duty) duties.push(x); });
+  S.regInfo = { repAdded, duties, viaKin: Object.keys(S.viaKin).length, matched: matched.size, unmatched, mode: R.structured ? '依「姓名」欄，只取「是否報名」打 V 的人' : '整份檔案掃描比對' };
 }
 function setAttendance(matched) {
   S.roster.forEach((r) => (r.attend = matched.has(r.name)));
@@ -679,11 +723,18 @@ function applyRoster() {
   S.rows = []; S.assign = null;
   loadReps();
 }
+/* 代表／醫護本身也是功德主：性別、椅子直接帶名單上的，不用再選一次 */
+function fillFromRoster(x) {
+  const r = S.roster.find((q) => q.name === x.name);
+  if (!r) return;
+  if (!x.gender && r.gender) x.gender = r.gender;
+  if (!x.chair && r.chair) x.chair = true;
+}
 function loadReps() {
   const o = S.repsOpts[S.repsOpts.length - 1]; // 使用最後讀到的代表名單
   if (!o) return;
   S.extras = S.extras.filter((x) => !x.fromFile);
-  o.rows.forEach((x) => S.extras.push({ name: resolveRepName(x.raw), role: x.role, klass: x.klass, gender: '', chair: false, isDonor: false, vol: x.vol, fromFile: true }));
+  o.rows.forEach((x) => { const ne = { name: resolveRepName(x.raw), role: x.role, klass: x.klass, gender: '', chair: false, isDonor: false, vol: x.vol, fromFile: true }; fillFromRoster(ne); S.extras.push(ne); });
 }
 
 /* ---------------- domain helpers ---------------- */
@@ -693,6 +744,7 @@ function engineRules() {
   const C = S.cfg;
   return { order: C.order.map((m, i) => ({ match: m, rank: i + 1 })), waveDefault: C.waveDefault, catCap: { '中台總功德主': C.cap1 }, cutAfterCats: C.cut, proxyCounts: false, noOverflow: true, waveCaps: S.waveCaps || {}, maleSide: '東', femaleSide: '西' };
 }
+const TBL_FS = 16; // 供燈／胸花統計表的字級
 const kinNoSeat = (r) => !!r.kinOf && r.duty === '關照親眷' && !r.proxyFor && !r.seatKin;
 function volCode(r) { return r.seatOnly ? '先行' : !r.vol ? (kinNoSeat(r) ? '親眷' : '') : r.mode === '事前供燈' ? '先行' : r.mode === '代供' ? '代供' : '隨波'; }
 const MODES = ['上台供燈', '事前供燈', '代供', '不供燈'];
@@ -702,8 +754,18 @@ const seatTitle = (note) => { const k = String(note || '').split(/[\s、,，;；
 function toPerson(r, extra) {
   return Object.assign({ name: r.name, title: r.title || seatTitle(r.note), category: r.category, gender: r.gender, chair: !!r.chair, kinOf: r.selfLamp ? '' : r.kinOf || '', selfLamp: !!r.selfLamp, nw: !!r.nw, er: !!r.er, noLamp: !r.selfLamp && (!!r.noLamp || (!!r.vol && r.mode === '不供燈')), volunteer: volCode(r), seatAnyway: r.vol === '義工入座' || !!r.seatKin || !!r.seatOnly, seatOnly: !!r.seatOnly, kin: [], rel: r.rel || '', note: r.note || '', vol: r.vol, mode: r.mode, proxy: r.proxy }, extra || {});
 }
+/* 功德主名單備註寫了「坐二壇／去二壇」：本人預設二壇身分（無座位、上台供燈）；寫「某某也去二壇」的眷屬，另外記下來，在第 3 步標二壇 */
+function noteEr(r) {
+  const text = String(r.notes || '').replace(/[\r\n]+/g, '；');
+  const kinEr = [];
+  let rest = text;
+  (r.kin || []).forEach((k) => { const re = new RegExp(k + '[^；、，,;]{0,6}二壇[^；]*', 'g'); if (re.test(text)) { kinEr.push(k); rest = rest.replace(re, ''); } });
+  const self = /二壇/.test(rest) && !/不(要|會|用|坐|去|上)?二壇/.test(rest);
+  return { self, kinEr };
+}
 /* roster → step-3 rows (auto order + waves) */
 function autoPlan() {
+  S.noteKinEr = {};
   const att = S.roster; 
   let lastHead = '';
   const people = [];
@@ -719,7 +781,10 @@ function autoPlan() {
     const kin = parseKin(reg.kin).filter((k) => !/功德主/.test(k.tag) && !att.some((x) => x.name === k.name)).map((k) => k.name);
     // 有義工執事＝預設不排座位。供燈方式：有眷屬一起來→眷屬代供；心燈／司儀／助唱→事前供燈；攝影／錄影→代供（要選代供人）；其他→上台供燈
     const mode0 = kin.length ? '代供' : /(心燈|司儀|助唱)/.test(duty) ? '事前供燈' : /(攝影|錄影|攝像)/.test(duty) ? '代供' : '上台供燈';
-    const auto = duty ? { vol: '義工', nw: mode0 === '事前供燈', er: /二壇/.test(duty), mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' } : {};
+    const ne = noteEr(r); ne.kinEr.forEach((k) => { S.noteKinEr[k] = true; });
+    const auto = duty ? { vol: '義工', nw: mode0 === '事前供燈', er: /二壇/.test(duty) || ne.self, mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' }
+      : ne.self ? { vol: '義工', nw: false, er: true, mode: '上台供燈', proxy: '' }
+      : (/備燈/.test(r.notes || '') && /(不唱名|不胸花|不隨(功德)?波次)/.test(r.notes || '')) ? { seatOnly: true, vol: '', mode: '', proxy: '' } : {}; // 備註寫「要排位子、備燈／不唱名、不隨功德波次、不胸花」＝自行供燈入座
     const p = toPerson(Object.assign({}, r, auto, ed), { category: r.category || (r.seq ? '' : lastHead), attached, noAutoSpouse: !!(nxt && !nxt.seq) || !r.seq || !!(S.noSpouse || {})[r.name], kin, duty });
     if (p.vol && !p.mode) p.mode = '上台供燈';
     people.push(p);
@@ -729,17 +794,53 @@ function autoPlan() {
   const ordOf = {}; att.forEach((x, ix) => { ordOf[x.name] = ix; });
   S.rows = [];
   prep.units.forEach((u) => u.members.forEach((m, i) => {
-    S.rows.push({ name: m.name, category: u.head.category, attached: i > 0, gender: m.gender || (S.edits[m.name] || {}).gender || '', chair: m.chair || (S.edits[m.name] || {}).chair || false, vol: m.vol || '', seatOnly: !!m.seatOnly, nw: !!m.nw, er: !!m.er, mode: m.mode || '', proxy: m.proxy || '', wave: m.wave || null, auto: !!m.auto, noLamp: !!m.noLamp, duty: m.duty || '', companion: false, kinOf: m.kinOf || '', seatKin: !!(S.kinSeat || {})[m.name], ord: (ordOf[m.kinOf || m.name] ?? 9999), note: (att.find((x) => x.name === m.name) || {}).note || '', title: seatTitle((att.find((x) => x.name === m.name) || {}).notes) });
+    S.rows.push({ name: m.name, category: u.head.category, attached: i > 0, gender: m.gender || (S.edits[m.name] || {}).gender || '', chair: m.chair || (S.edits[m.name] || {}).chair || false, vol: m.vol || '', seatOnly: !!m.seatOnly, nw: !!m.nw, er: !!m.er || !!(S.noteKinEr || {})[m.name], mode: m.mode || '', proxy: m.proxy || '', wave: m.wave || null, auto: !!m.auto, noLamp: !!m.noLamp, duty: m.duty || '', companion: false, kinOf: m.kinOf || '', seatKin: !!(S.kinSeat || {})[m.name], ord: (ordOf[m.kinOf || m.name] ?? 9999), note: (att.find((x) => x.name === m.name) || {}).note || '', title: seatTitle((att.find((x) => x.name === m.name) || {}).notes) });
   }));
   S.autoWarnings = prep.warnings;
   syncProxies();
   resortByWave(true);
 }
 /* 依波次把整戶排好；不供燈的義工放到最後（不帶波次） */
-const unitRank = (u) => { const h = u[0]; return h.seatOnly ? 4 : h.vol && h.mode === '不供燈' ? 3 : (!h.attached && h.kinOf && h.duty === '關照親眷') ? 2 : h.vol && h.mode === '事前供燈' ? 1 : 0; };
+const unitRank = (u) => { const h = u[0]; if (u.some((x) => x.wave && isUp(x))) return 0; /* 伉儷一人事前供燈、另一人上台：整戶跟著上台那位留在波次區 */ return h.seatOnly ? 4 : h.vol && h.mode === '不供燈' ? 3 : (!h.attached && h.kinOf && h.duty === '關照親眷') ? 2 : h.vol && h.mode === '事前供燈' ? 1 : 0; };
+/* 伉儷（一戶）一人事前供燈／不供燈／自行供燈、另一人上台供燈：事前供燈那位移到後面的義工區，留在波次的那位依自己上台的次第排；兩人都回到同一類就併回一戶。
+   拆開的人記 hh（原本那一戶），排座位時仍視為同一戶（夫妻並坐）。 */
+const isTailMem = (r) => !!r.seatOnly || !!(r.vol && (r.mode === '事前供燈' || r.mode === '不供燈'));
+function regroupHouseholds(units) {
+  const hhOf = (u) => u[0].hh || '';
+  // 1) 先把拆開的同一戶併回來（併了不會再被拆開才併）
+  const out = [];
+  units.forEach((u) => {
+    const key = hhOf(u);
+    const mate = key ? out.find((o) => hhOf(o) === key) : null;
+    if (mate) {
+      const all = mate.concat(u), tails = all.filter(isTailMem).length, ups = all.filter((x) => x.wave && isUp(x)).length;
+      if (!(tails && ups)) {
+        const upFirst = !mate.some((x) => x.wave && isUp(x)) && u.some((x) => x.wave && isUp(x)); // 上台的那位排前面（波次以他為準）
+        const merged = upFirst ? u.concat(mate) : mate.concat(u), w = (merged.find((x) => x.wave && isUp(x)) || {}).wave || null;
+        merged.forEach((x, i) => { x.attached = i > 0; if (isUp(x) && w) x.wave = w; });
+        out.splice(out.indexOf(mate), 1, merged); return;
+      }
+    }
+    out.push(u);
+  });
+  // 2) 同一戶有人事前供燈／不供燈／自行供燈、另有人上台：拆開
+  const res = [];
+  out.forEach((u) => {
+    if (u.length < 2) { res.push(u); return; }
+    const tails = u.filter(isTailMem), ups = u.filter((x) => x.wave && isUp(x));
+    if (!tails.length || !ups.length) { res.push(u); return; }
+    const key = u[0].hh || u[0].name;
+    u.forEach((x) => { x.hh = key; });
+    const rest = u.filter((x) => !isTailMem(x));
+    rest.forEach((x, i) => { x.attached = i > 0; }); res.push(rest);
+    tails.forEach((x) => { x.attached = false; x.wave = null; res.push([x]); });
+  });
+  return res;
+}
 function resortByWave(initial) {
-  const units = [];
+  let units = [];
   S.rows.forEach((r) => { if (r.attached && units.length) units[units.length - 1].push(r); else units.push([r]); });
+  units = regroupHouseholds(units);
   // 同一戶的波次要一致：以「實際上台」那位為準（代供的義工、代供人不能各飄各的）
   units.forEach((u) => { const m = u.find((x) => isUp(x) && x.wave) || u.find((x) => x.wave); if (m) u.forEach((x) => { if (x.wave != null || isUp(x)) x.wave = m.wave; }); });
   let prev = 0;
@@ -783,12 +884,13 @@ function syncProxies() {
     S.rows.splice(j, 0, { name, category: v.category, attached: true, gender: (S.edits[name] || {}).gender || '', chair: !!(S.edits[name] || {}).chair, vol: '', mode: '', proxy: '', wave: null, auto: true, added: true, noLamp: false, duty: '代供人', kinOf: v.name, proxyFor: v.name, note: '' });
   });
 }
-function unitsFromRows() {
-  const units = [];
+function unitsFromRows(forSeating) {
+  const units = [], byHh = {};
   S.rows.forEach((r) => {
     const p = toPerson(r, { wave: r.wave });
     if (r.attached && units.length) units[units.length - 1].members.push(p);
-    else units.push({ head: p, members: [p] });
+    else if (forSeating && r.hh && byHh[r.hh]) byHh[r.hh].members.push(p); // 拆開排在不同區的伉儷，排座位時仍算同一戶
+    else { const u = { head: p, members: [p] }; units.push(u); if (r.hh) byHh[r.hh] = u; }
   });
   return units;
 }
@@ -871,7 +973,7 @@ function step1() {
   if (S.regCells) {
     const ri = S.regInfo, um = ri ? ri.unmatched : [];
     $('#i2').innerHTML = !S.roster.length ? `<div class="note warn">${esc(S.regFile)} 已讀入，請先上傳第 ① 個檔案才能比對。</div>`
-      : `<div class="note ${um.length ? 'warn' : 'ok'}">${esc(S.regFile)}：本場 ${ri ? ri.matched : 0} 位，${ri && ri.mode.indexOf('整份') < 0 ? '義工 ' + (ri.duties || []).filter((x) => !um.includes(x)).length + ' 位' + (ri.viaKin ? '，另有 ' + ri.viaKin + ' 位功德主由學員的關聯親眷判定有來' : '') : '<b>⚠ 讀不到義工執事（找不到姓名欄）</b>'}。${um.length ? `<br>另有 ${um.length} 位報名但不在功德主名單：${esc(um.slice(0, 8).map((x) => x.name).join('、') + (um.length > 8 ? ' 等' : ''))} <button class="small" id="addum">加進本場</button>` : ''}</div>`;
+      : `<div class="note ${um.length ? 'warn' : 'ok'}">${esc(S.regFile)}：本場 ${ri ? ri.matched : 0} 位，${ri && ri.mode.indexOf('整份') < 0 ? '義工 ' + (ri.duties || []).filter((x) => !um.includes(x)).length + ' 位' + (ri.viaKin ? '，另有 ' + ri.viaKin + ' 位功德主由學員的關聯親眷判定有來' : '') : '<b>⚠ 讀不到義工執事（找不到姓名欄）</b>'}。${ri && ri.repAdded && ri.repAdded.length ? `<br>醫護／代表 ${ri.repAdded.length} 位已帶入第 2 步：${esc(ri.repAdded.slice(0, 10).join('、'))}` : ''}${um.length ? `<br>另有 ${um.length} 位報名但不在功德主名單：${esc(um.slice(0, 8).map((x) => x.name).join('、') + (um.length > 8 ? ' 等' : ''))} <button class="small" id="addum">加進本場</button>` : ''}</div>`;
     const au = $('#addum');
     if (au) au.onclick = () => {
       um.forEach((x) => { S.roster.push({ seq: '+', name: x.name, category: '', gender: '', chair: false, note: '', notes: '', kin: [], seatwith: '', attend: true }); S.regByName[x.name] = x; });
@@ -931,20 +1033,21 @@ function step2() {
   };
   $('#clr').onclick = () => { S.roster.forEach((r) => (r.attend = false)); S.rows = []; drawRoster(); count(); };
   const drawX = () => {
+    S.extras.forEach(fillFromRoster);
     const opt = (list, v) => list.map((x) => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('');
     $('#xb').innerHTML = S.extras.map((x, i) => {
       const dup = S.roster.some((r) => r.attend && r.name === x.name);
       return `<tr><td><input type="text" data-k="name" data-i="${i}" value="${esc(x.name)}" size="8">${dup ? ' <span class="hint">已是功德主</span>' : ''}</td>
-      <td><select data-k="role" data-i="${i}">${opt(['醫護', '班級供燈代表', '前三班級代表', '其他代表'], x.role)}</select></td>
+      <td><select data-k="role" data-i="${i}">${opt(['醫護', '班級供燈代表', '前三班級代表', '點名長', '其他代表'], x.role)}</select></td>
       <td><input type="text" data-k="klass" data-i="${i}" value="${esc(x.klass)}" size="8"></td>
-      <td><select data-k="gender" data-i="${i}" class="${x.gender || dup || x.vol ? '' : 'bad-cell'}">${opt(['', '男', '女'], x.gender)}</select></td>
+      <td><select data-k="gender" data-i="${i}" class="${x.gender || dup || x.vol || x.role === '點名長' ? '' : 'bad-cell'}">${opt(['', '男', '女'], x.gender)}</select></td>
       <td><input type="checkbox" data-k="chair" data-i="${i}" ${x.chair ? 'checked' : ''}></td>
       <td><input type="checkbox" data-k="vol" data-i="${i}" ${x.vol ? 'checked' : ''}></td>
       <td><button class="small" data-del="${i}">刪除</button></td></tr>`;
     }).join('') || '<tr><td colspan="7" class="hint">沒有代表。若要新增，按下方「＋ 新增一列」。</td></tr>';
     $('#xb').querySelectorAll('[data-k]').forEach((el) => el.onchange = el.oninput = () => {
       const x = S.extras[+el.dataset.i], k = el.dataset.k;
-      x[k] = k === 'chair' || k === 'vol' ? el.checked : el.value; x.fromFile = false; S.assign = null;
+      x[k] = k === 'chair' || k === 'vol' ? el.checked : el.value; x.fromFile = false; x.fromReg = false; S.assign = null;
     });
     $('#xb').querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { S.extras.splice(+b.dataset.del, 1); S.assign = null; drawX(); });
   };
@@ -980,28 +1083,31 @@ function step3() {
   const applySt = (o) => { S.rows = o.rows; S.manualWave = o.manualWave; S.waveCaps = o.waveCaps; S.companions = o.companions; S.kinSeat = o.kinSeat; S.kinSelf = o.kinSelf; S.edits = o.edits; S.noSpouse = o.noSpouse; S.assign = null; draw(); check(); volBox(); updHist(); };
   const candidates = () => S.rows.map((r) => r.name);
   const draw = () => {
-    let prevW = null;
+    let prevW = null, tailed = false;
+    const uwAt = {}; { let hi = -1; S.rows.forEach((r, i) => { if (!r.attached || hi < 0) { hi = i; uwAt[hi] = null; } if (r.wave && isUp(r) && !uwAt[hi]) uwAt[hi] = r.wave; }); }
+    const uwOf = (i) => { while (i > 0 && S.rows[i].attached) i--; return uwAt[i] || null; }; // 這一戶實際上台的波次（頭一位事前供燈、同修上台時，波次在同修身上）
     $('#pxl').innerHTML = candidates().map((n) => `<option value="${esc(n)}">`).join('');
     $('#tb3').innerHTML = S.rows.map((r, i) => {
       if (S.onlyVol && !r.vol && !r.duty) return '';
-      const start = r.wave && r.wave !== prevW; if (r.wave) prevW = r.wave;
+      const uw = uwOf(i), start = !r.attached && uw && uw !== prevW; if (start) prevW = uw;
+      const tail = !r.attached && !uw && prevW !== null && !tailed; if (tail) tailed = true; // 最後一波之後第一列（義工／事前供燈／親眷等）：多一條分隔線
       const wsum = start ? (() => {
-        const w = r.wave, n = waveCount(w), px = waveProxies(w), cap = waveCapOf(w), over = n > cap;
+        const w = uw, n = waveCount(w), px = waveProxies(w), cap = waveCapOf(w), over = n > cap;
         const opts = [1, 2, 3, 4, 5].filter((x) => x <= Math.max(4, S.cfg.waveDefault)).map((x) => `<option ${x === cap ? 'selected' : ''}>${x}</option>`).join('');
         return `<tr class="wsum"><td colspan="11" style="background:${over ? '#fde2e0' : '#f4efe8'};font-size:12px;padding:3px 8px"><b>第 ${w} 波　${n}/${n + px.length}</b>（上台 ${n} 人／名單 ${n + px.length} 人${px.length ? '，含代供：' + esc(px.map((x) => x.name + '→' + (x.proxy || '？')).join('、')) : ''}）　本波上台人數上限 <select data-wcap="${w}">${opts}</select>${over ? '　<span style="color:#b00">⚠ 超過上限，請確認是否有人要標代供</span>' : ''}</td></tr>`;
       })() : '';
-      const cls = (r.wave ? 'w' + (r.wave % 2) : 'pre') + (start ? ' wstart' : '');
+      const cls = (r.wave ? 'w' + (r.wave % 2) : uw ? 'w' + (uw % 2) : 'pre') + (start || tail ? ' wstart' : '');
       const head = !r.attached;
         return wsum + `<tr class="${cls}" data-i="${i}">
         <td>${head ? `<button class="small" data-up="${i}">↑</button><button class="small" data-dn="${i}">↓</button>` : ''}</td>
-        <td style="white-space:nowrap"><input type="text" inputmode="numeric" size="2" style="width:34px;text-align:center" data-k="wave" value="${r.wave || ''}" ${!isUp(r) ? 'disabled' : ''}>${head && isUp(r) ? `<span style="display:inline-flex;flex-direction:column;vertical-align:middle;margin-left:2px"><button class="small" style="padding:0 4px;line-height:1.1;font-size:10px" title="提前一波（-1）" data-wstep="${i}:-1">▲</button><button class="small" style="padding:0 4px;line-height:1.1;font-size:10px" title="延後一波（+1）" data-wstep="${i}:1">▼</button></span>` : ''}</td>
+        <td style="white-space:nowrap"><input type="text" inputmode="numeric" size="2" style="width:34px;text-align:center" data-k="wave" value="${r.wave || ''}" ${!isUp(r) ? 'disabled' : ''}>${head && uw ? `<span style="display:inline-flex;flex-direction:column;vertical-align:middle;margin-left:2px"><button class="small" style="padding:0 4px;line-height:1.1;font-size:10px" title="提前一波（-1）" data-wstep="${i}:-1">▲</button><button class="small" style="padding:0 4px;line-height:1.1;font-size:10px" title="延後一波（+1）" data-wstep="${i}:1">▼</button></span>` : ''}</td>
         <td>${head ? esc(short(r.category)) : ''}</td><td>${esc(r.name)}${head && !r.kinOf && isUp(r) ? ` <button class="small" data-addc="${i}" title="加一位一起供燈的人" style="opacity:.45;padding:0 5px">＋</button>` : ''}${r.auto ? ' <span class="hint">(自動補：備註寫伉儷但名單沒有同修姓名)</span> <button class="small" data-nospouse="' + esc(r.name.replace(/同修$/, '')) + '">不需要，移除</button>' : ''}</td><td style="font-size:12px;color:#7a4a00">${esc(r.duty || '')}</td>
         <td><select data-k="gender" class="${r.gender ? '' : 'bad-cell'}"><option></option><option ${r.gender === '男' ? 'selected' : ''}>男</option><option ${r.gender === '女' ? 'selected' : ''}>女</option></select></td>
         <td><input type="checkbox" data-k="chair" ${r.chair ? 'checked' : ''}></td>
         <td>${r.kinOf && r.duty === '關照親眷' && !r.proxyFor ? `<select data-k="kseat"><option value="">不給座位</option><option value="1" ${r.seatKin ? 'selected' : ''}>給座位</option></select>` : `<select data-k="vol">${(() => { const cur = r.seatOnly ? 'nw_seat' : r.vol === '義工入座' ? 'v_seat' : r.vol === '義工' ? (r.nw ? 'nw_noseat' : r.er ? 'er_noseat' : 'v_noseat') : ''; return [['', '一般功德主'], ['v_seat', '義工（有座位）'], ['v_noseat', '義工（無座位）'], ['er_noseat', '二壇（無座位，上台供燈）'], ['nw_seat', '不進波次（有座位）'], ['nw_noseat', '不進波次（無座位）']].map(([v, t]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${t}</option>`).join(''); })()}</select>`}</td>
         <td>${r.kinOf && (r.duty === '關照親眷' || r.companion) ? `<select data-k="kmode"><option ${!r.noLamp ? 'selected' : ''}>上台供燈</option>${r.kinOf && r.duty === '關照親眷' && !r.proxyFor ? `<option ${r.selfLamp ? 'selected' : ''}>自行供燈</option>` : ''}<option ${r.noLamp && !r.selfLamp ? 'selected' : ''}>不供燈</option></select>` : r.seatOnly ? `<select data-k="mode" disabled><option selected>自行供燈</option></select>` : `<select data-k="mode" ${r.vol ? '' : 'disabled'}>${(!r.vol && r.noLamp) ? '<option selected>不供燈（親眷）</option>' : ''}${MODES.filter(() => !(!r.vol && r.noLamp)).map((m) => `<option ${r.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>`}</td>
         <td><input type="text" list="pxl" data-k="proxy" size="8" value="${esc(r.proxy || '')}" placeholder="${r.vol && r.mode === '代供' ? '選或輸入' : ''}" class="${r.vol && r.mode === '代供' && !r.proxy ? 'bad-cell' : ''}" ${r.vol && r.mode === '代供' ? '' : 'disabled'}></td>
-        <td>${esc([r.kinOf && !r.proxyFor ? '親眷 ' + r.kinOf : '', r.er && !/二壇/.test(r.duty || '') ? '二壇' : '', r.noLamp && !(r.vol && r.mode === '不供燈') && !r.selfLamp ? '不上台供燈' : '', r.selfLamp ? '自行供燈：需備燈（有座位、不唱名、不胸花、列在最後）' : r.seatOnly ? '自行供燈：需備燈（有座位、不唱名、不胸花、列在最後）' : '', r.proxyFor ? '代供 ' + r.proxyFor : '', r.vol && r.mode === '不供燈' ? '不供燈（列在最後）' : '', r.note].filter(Boolean).join('、'))}</td></tr>`;
+        <td>${esc([r.kinOf && !r.proxyFor ? '親眷 ' + r.kinOf : '', r.er && !/二壇/.test(r.duty || '') ? '二壇' : '', repTag(r.name), r.noLamp && !(r.vol && r.mode === '不供燈') && !r.selfLamp ? '不上台供燈' : '', r.selfLamp ? '自行供燈：需備燈（有座位、不唱名、不胸花、列在最後）' : r.seatOnly ? '自行供燈：需備燈（有座位、不唱名、不胸花、列在最後）' : '', r.proxyFor ? '代供 ' + r.proxyFor : '', r.vol && r.mode === '不供燈' ? '不供燈（列在最後）' : '', r.note].filter(Boolean).join('、'))}</td></tr>`;
     }).join('');
     $('#tb3').querySelectorAll('tr[data-i]').forEach((tr) => {
       const i = +tr.dataset.i, r = S.rows[i];
@@ -1048,7 +1154,9 @@ function step3() {
             // 事前供燈／不供燈 改回供燈：放回他在功德主名單的次第
             const u0 = (() => { let a = S.rows.indexOf(r); while (a > 0 && S.rows[a].attached) a--; let b = a + 1; while (b < S.rows.length && S.rows[b].attached) b++; return [a, b]; })();
             const unit = S.rows.slice(u0[0], u0[1]);
-            if ((k === 'vol' || k === 'mode') && rankBefore !== 0 && unitRank(unit) === 0 && !r.attached) {
+            const mateUp = r.hh ? S.rows.find((x) => x !== r && x.hh === r.hh && x.wave && isUp(x)) : null; // 拆開的伉儷：改回上台供燈就併回另一半那一波
+            if (mateUp && isUp(r)) r.wave = mateUp.wave;
+            else if ((k === 'vol' || k === 'mode') && rankBefore !== 0 && unitRank(unit) === 0 && !r.attached) {
               S.rows.splice(u0[0], u0[1] - u0[0]);
               let at = S.rows.findIndex((x) => !x.attached && unitRank([x]) === 0 && (x.ord ?? 9999) > (r.ord ?? 9999));
               if (at < 0) at = S.rows.findIndex((x) => !x.attached && unitRank([x]) > 0); if (at < 0) at = S.rows.length;
@@ -1072,7 +1180,7 @@ function step3() {
     });
     $('#tb3').querySelectorAll('[data-wcap]').forEach((sel) => sel.onchange = () => { save(); (S.waveCaps = S.waveCaps || {})[+sel.dataset.wcap] = +sel.value; S.manualWave = false; replan(); S.assign = null; draw(); check(); });
     $('#tb3').querySelectorAll('[data-nospouse]').forEach((b) => b.onclick = () => { save(); (S.noSpouse = S.noSpouse || {})[b.dataset.nospouse] = true; autoPlan(); S.assign = null; draw(); check(); });
-    $('#tb3').querySelectorAll('[data-wstep]').forEach((b) => b.onclick = () => { save(); const [i, d] = b.dataset.wstep.split(':').map(Number); const r = S.rows[i]; setUnitWave(i, Math.max(1, (r.wave || 1) + d)); S.manualWave = true; S.sel3 = null; S.assign = null; draw(); check(); });
+    $('#tb3').querySelectorAll('[data-wstep]').forEach((b) => b.onclick = () => { save(); const [i, d] = b.dataset.wstep.split(':').map(Number); setUnitWave(i, Math.max(1, (uwOf(i) || 1) + d)); S.manualWave = true; S.sel3 = null; S.assign = null; draw(); check(); });
     $('#tb3').querySelectorAll('input[data-k="wave"]').forEach((el) => el.onkeydown = (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); save(); const i = +el.closest('tr').dataset.i; const r = S.rows[i]; setUnitWave(i, Math.max(1, (r.wave || 1) + (e.key === 'ArrowUp' ? -1 : 1))); S.manualWave = true; S.assign = null; draw(); check(); } });
     $('#tb3').querySelectorAll('[data-up]').forEach((b) => b.onclick = () => moveUnit(+b.dataset.up, -1));
     $('#tb3').querySelectorAll('[data-dn]').forEach((b) => b.onclick = () => moveUnit(+b.dataset.dn, 1));
@@ -1127,7 +1235,7 @@ function step3() {
     const vs = S.rows.filter((r) => r.duty || r.vol);
     const byDuty = {}; vs.forEach((r) => { const k = r.duty || '(自行標記)'; byDuty[k] = (byDuty[k] || 0) + 1; });
     $('#volbox').innerHTML = vs.length ? `<div class="note warn"><b>義工執事 ${vs.length} 位</b>（${Object.entries(byDuty).map(([k, v]) => esc(k) + ' ' + v).join('、')}）：預設一律<b>不排座位</b>；需要座位的人，在「身分／座位」欄選「義工（有座位）」。<br>供燈方式四種：<b>上台供燈</b>（入波次、沒座位）、<b>事前供燈</b>（不入波次，唱名）、<b>代供</b>（填代供人；代供人若是眷屬或新輸入的名字，會自動排座位並進波次）、<b>不供燈</b>（列在最後，不帶波次）。預設：有眷屬同行→眷屬代供；心燈／司儀／助唱→事前供燈；攝影／錄影→代供（請選代供人）；其他→上台供燈。
-      <div class="row"><label><input type="checkbox" id="ov" ${S.onlyVol ? 'checked' : ''}> 只顯示義工執事</label></div></div>` : '';
+      <div class="row"><label><input type="checkbox" id="ov" ${S.onlyVol ? 'checked' : ''}> 顯示義工執事及特殊關照</label></div></div>` : '';
     const ov = $('#ov'); if (ov) ov.onchange = () => { S.onlyVol = ov.checked; draw(); };
   };
   $('#undo').onclick = () => { if (!H.u.length) return; H.r.push(cloneSt()); applySt(H.u.pop()); };
@@ -1172,12 +1280,14 @@ const TYPE_COLOR = { '拜墊': '#E8D1FF', '中台椅': '#D6AD84', '黑靠背椅'
 function curLayout() { return S.layoutOpts.find((o) => o.key === S.layoutKey) || S.layoutOpts[0]; }
 function runSeating() {
   const L = curLayout(), seats = L.seats;
-  if (S._marksFor !== L.key) { S.marks = {}; seats.forEach((s) => { if (s.mark) S.marks[s.code] = s.mark; }); S._marksFor = L.key; }
+  if (S._marksFor !== L.key) { S.marks = {}; S.touched = {}; S.autoMarks = {}; seats.forEach((s) => { if (s.mark) S.marks[s.code] = s.mark; }); S._marksFor = L.key; }
+  Object.keys(S.autoMarks || {}).forEach((c) => { if (S.marks[c] === '男眾座位區') delete S.marks[c]; }); S.autoMarks = {};
+  applyPendingMarks(); // 上次自動標的先拿掉，依這次排位結果重算
   const layout = seats.map((s) => ({ code: s.code, side: s.side, row: s.row, pos: s.pos, type: s.type, reserved: !!S.marks[s.code] }));
   S.seatLayout = layout;
-  const units = unitsFromRows();
+  const units = unitsFromRows(true);
   const att = new Set(S.roster.filter((r) => r.attend).map((r) => r.name));
-  const extras = S.extras.filter((x) => x.name && !x.vol && !att.has(x.name)).map((x) => Object.assign({}, x));
+  const extras = S.extras.filter((x) => x.name && x.role !== '點名長' && !x.vol && !att.has(x.name)).map((x) => Object.assign({}, x));
   const out = E.seatUnits(layout, units, engineRules(), extras);
   const assign = {};
   out.result.forEach((r) => {
@@ -1186,7 +1296,25 @@ function runSeating() {
     const label = kind === 'medic' ? '醫護' : kind === 'rep' ? (p.klass ? p.klass : '') + '代表' : (p.kinOf && p.noLamp) || p.selfLamp ? '保留' : short(p.category);
     assign[r.seat] = { name: p.name, label, kind, wave: kind === 'donor' && !(p.kinOf && p.noLamp) ? p.wave || null : null, gender: p.gender, kin: !!(p.kinOf && p.noLamp) };
   });
-  S.assign = assign; S.warnings = out.warnings; S.unseated = out.unseated.map((p) => p.name); S.sel = null;
+  applyPendingSeats(layout, assign); S.assign = assign; S.autoNote = autoReserveMale(layout, assign); S.warnings = out.warnings; S.unseated = out.unseated.map((p) => p.name); S.sel = null;
+}
+/* 自動留「男眾座位區」：緊接在「有人坐的最後一排」後面的空排——黑椅區 2 排、西邊紫拜墊 1 排。整排都是空的才標；使用者手動標過、移過的不動 */
+function autoReserveMale(layout, assign) {
+  // 範本或使用者已經有自己的男眾座位區（不是自動標的）→ 不再自動加，以免重複
+  if (Object.keys(S.marks).some((c) => S.marks[c] === '男眾座位區' && !(S.autoMarks || {})[c])) return '';
+  const touched = S.touched || {};
+  const lastOcc = (side) => Math.max(0, ...layout.filter((x) => x.side === side && assign[x.code]).map((x) => x.row));
+  const rowsAfter = (side, type, after) => { const g = {}; layout.filter((x) => x.side === side && x.type === type && x.row > after).forEach((x) => { (g[x.row] = g[x.row] || { side, row: x.row, seats: [] }).seats.push(x); }); return Object.values(g).sort((p, q) => p.row - q.row); };
+  const ok = (g) => g.seats.every((x) => !assign[x.code] && !S.marks[x.code] && !touched[x.code]);
+  const take = (gs, n) => { const got = []; for (const g of gs) { if (got.length >= n || !ok(g)) break; g.seats.forEach((x) => { S.marks[x.code] = '男眾座位區'; S.autoMarks[x.code] = 1; x.reserved = true; }); got.push(g.side + g.row); } return got; };
+  const parts = [];
+  ['東', '西'].forEach((side) => {
+    const bl = rowsAfter(side, '黑靠背椅', lastOcc(side));
+    if (bl.length || layout.some((x) => x.side === side && x.type === '黑靠背椅')) { const g = take(bl, 2); parts.push(g.length === 2 ? `黑椅區緊接在有人坐的最後一排後面 2 排（${g.join('、')}）` : g.length ? `黑椅區後面空排不夠，只標了 ${g.length} 排（${g.join('、')}）` : '黑椅區後面沒有整排空的，沒有標'); }
+  });
+  const wl = rowsAfter('西', '拜墊', lastOcc('西'));
+  if (layout.some((x) => x.side === '西' && x.type === '拜墊')) { const g = take(wl, 1); parts.push(g.length ? `西邊緊接 1 排紫拜墊（${g.join('、')}）` : '西邊紫拜墊後面沒有整排空的，沒有標'); }
+  return parts.length ? '已自動標成「男眾座位區」：' + parts.join('；') + '。可以在「對調座位」模式直接點選／拖曳來移動，也可在「標記空位」改掉。' : '';
 }
 function step4() {
   if (!S.layoutOpts.length) { go(1); return; }
@@ -1201,6 +1329,7 @@ function step4() {
       <button id="rr">重新自動排位（保留空位標記）</button></div>
     <div id="swh" class="swhint"></div>
     <div class="note ok">共 ${total} 個座位，已排 ${used} 人，還有 ${free} 個空位沒有用途。</div>
+    ${S.autoNote ? `<div class="note ok">${esc(S.autoNote)}</div>` : ''}
     <div id="wn"></div>
     <div class="legend">${Object.entries(TYPE_COLOR).map(([k, v]) => `<span style="background:${v}">${k}</span>`).join('')}<span style="background:#fff">其他</span></div>
     <div class="tabs" id="tabs"></div>
@@ -1245,7 +1374,10 @@ function cellText(s, mode, screen) {
 }
 function drawChart() {
   const g = gridOf(), mode = S.view;
-  let h = `<div style="text-align:center;font-size:12px;color:#888;margin-bottom:6px">▲ 佛龕（前）　　　西單　　　｜　　　東單</div>`;
+  // 標題對齊座位：西單在西邊那幾格正上方置中、東單在東邊那幾格正上方置中，佛龕在走道正上方
+  const SW = 90; // 每格座位寬（86 + 左右 margin）
+  let h = `<div class="crow" style="margin-bottom:0;font-size:12px;color:#888"><div class="rowlbl"></div><div style="width:${g.maxW * SW}px"></div><div class="aisle" style="position:relative;height:16px"><span style="position:absolute;left:50%;transform:translateX(-50%);white-space:nowrap">▲ 佛龕（前）</span></div><div style="width:${g.maxE * SW}px"></div></div>`
+    + `<div class="crow" style="margin-bottom:6px;font-size:13px;color:#555;font-weight:600"><div class="rowlbl"></div><div style="width:${g.maxW * SW}px;text-align:center">西單</div><div class="aisle">｜</div><div style="width:${g.maxE * SW}px;text-align:center">東單</div></div>`;
   g.rr.forEach((r) => {
     const R = g.rows[r];
     const mk = (s) => {
@@ -1261,8 +1393,8 @@ function drawChart() {
   $('#chart').querySelectorAll('.seat[data-c]').forEach((el) => {
     const code = el.dataset.c;
     el.onclick = () => clickSeat(code);
-    if (canMove && !S.marks[code]) {
-      if (S.assign[code]) {
+    if (canMove) {
+      if (S.assign[code] || S.marks[code]) {
         el.draggable = true; el.title = '可點選後再點另一格，或直接拖到別的座位';
         el.ondragstart = (e) => { S.drag = code; el.classList.add('dg'); try { e.dataTransfer.setData('text/plain', code); e.dataTransfer.effectAllowed = 'move'; } catch (x) {} };
         el.ondragend = () => { S.drag = null; el.classList.remove('dg'); document.querySelectorAll('.seat.ov').forEach((x) => x.classList.remove('ov')); };
@@ -1275,28 +1407,35 @@ function drawChart() {
   const hb = $('#swh');
   if (hb) {
     if (S.tool === 'mark') { hb.className = 'swhint'; hb.textContent = '【標記空位】點空座位：依序切換「男眾座位區」→「保留」→ 取消。'; }
-    else if (S.sel) { hb.className = 'swhint on'; const a = S.assign[S.sel]; hb.textContent = `已選 ${a ? a.name : ''}（${S.sel}）→ 現在請點另一個座位：有人＝兩人對調，空位＝移過去。再點同一格＝取消。`; }
+    else if (S.sel) { hb.className = 'swhint on'; const a = S.assign[S.sel]; hb.textContent = `已選 ${a ? a.name : S.marks[S.sel] || ''}（${S.sel}）→ 現在請點另一個座位：有人＝兩人對調，空位＝移過去${a ? '' : '（標記會搬到那一格）'}。再點同一格＝取消。`; }
     else { hb.className = 'swhint'; hb.innerHTML = '💡 <b>換座位兩種方法：</b>①先點有人的座位，再點要換的座位（對方有人＝對調，空位＝移過去）　②直接用滑鼠把座位框拖到別的座位上放開。'; }
   }
 }
+function setMark(code, v) { if (v) S.marks[code] = v; else delete S.marks[code]; const ly = S.seatLayout.find((x) => x.code === code); if (ly) ly.reserved = !!v; (S.touched = S.touched || {})[code] = 1; if (S.autoMarks) delete S.autoMarks[code]; }
+/* 對調：人⇄人、人⇄空位、人⇄標記座位、標記座位（男眾座位區／保留）⇄空位或別的座位——標記跟著搬過去 */
 function swapSeats(from, to) {
-  if (S.marks[to] || S.marks[from]) return;
-  const a = S.assign[from], b = S.assign[to];
-  if (!a) return;
-  if (b) S.assign[from] = b; else delete S.assign[from];
-  S.assign[to] = a; S.sel = null; drawChart();
+  const ma = S.marks[from] || '', mb = S.marks[to] || '', a = S.assign[from], b = S.assign[to];
+  if (!ma && !mb) {
+    if (!a) return;
+    if (b) S.assign[from] = b; else delete S.assign[from];
+    S.assign[to] = a; S.sel = null; drawChart(); return;
+  }
+  if (ma && mb) { setMark(from, mb); setMark(to, ma); S.sel = null; drawChart(); return; }
+  // 一邊是標記座位、另一邊是人或空位：標記搬到另一格，人（若有）坐進原本標記的位子
+  const m = ma || mb, mSeat = ma ? from : to, oSeat = ma ? to : from, p = S.assign[oSeat];
+  setMark(oSeat, m); setMark(mSeat, '');
+  if (p) { S.assign[mSeat] = p; delete S.assign[oSeat]; }
+  S.sel = null; drawChart();
 }
 function clickSeat(code) {
   if (S.tool === 'mark') {
     if (S.assign[code]) return;
     const cyc = ['', '男眾座位區', '保留'], cur = S.marks[code] || '';
     const nx = cyc[(cyc.indexOf(cur) + 1) % cyc.length];
-    if (nx) S.marks[code] = nx; else delete S.marks[code];
-    const ly = S.seatLayout.find((x) => x.code === code); if (ly) ly.reserved = !!nx;
+    setMark(code, nx);
     drawChart(); return;
   }
-  if (S.marks[code]) return;
-  if (!S.sel) { if (S.assign[code]) { S.sel = code; drawChart(); } return; }
+  if (!S.sel) { if (S.assign[code] || S.marks[code]) { S.sel = code; drawChart(); } return; }
   if (S.sel === code) { S.sel = null; drawChart(); return; }
   swapSeats(S.sel, code);
 }
@@ -1339,7 +1478,17 @@ function cloneSheet(wb, src, title) {
   return ws;
 }
 /* 顏色定義（來自你 1018 總座位圖／公告座位圖的上色）：功德主／保留席＝粉紅，代表＝淡橘，男眾名字格＝淡藍 */
-const FILL = { pink: 'FFFFB7FF', peach: 'FFFBE5D6', blue: 'FFD9E1F2' };
+const FILL = { pink: 'FFFFB7FF', peach: 'FFFBE5D6', blue: 'FFD9E1F2', green: 'FFE2EFDA', yellow: 'FFFFF2CC' }; // 代表＝淺綠、醫護＝淺黃（樣板底下圖例有定義就以樣板為準）
+/* 樣板座位圖下方有圖例（「造窟代表」「醫護」各有一格顏色）：直接沿用那格的底色 */
+function legendFill(wb, text, fallback) {
+  try {
+    for (const w of wb.worksheets) for (let r = 60; r <= Math.min(w.rowCount, 90); r++) for (let c = 1; c <= 40; c++) {
+      const t = cv(w.getRow(r).getCell(c)).replace(/\s/g, '');
+      if (t === text) { const f = w.getRow(r - 1).getCell(c).fill; if (f && f.type === 'pattern' && f.pattern === 'solid' && f.fgColor) return JSON.parse(JSON.stringify(f)); }
+    }
+  } catch (e) {}
+  return fallback;
+}
 const solid = (argb) => (argb ? { type: 'pattern', pattern: 'solid', fgColor: { argb } } : { type: 'pattern', pattern: 'none' });
 const PH = /^(姓名|功德項目|班級名代表|姓名法名|班級|姓名\/義工執事名稱\/功德項目|[①-⑳㉑-㉟](功德項目|姓名.*)|備註義工名稱.*|填義工執事名稱)$/;
 function fillSeats(ws, mode, seatsIn) {
@@ -1351,11 +1500,13 @@ function fillSeats(ws, mode, seatsIn) {
   const labF = [], nameF = [];
   seats.forEach((s) => { const lc = ws.getRow(s.r - 1).getCell(s.c), nc = ws.getRow(s.r + 1).getCell(s.c); if (isPink(lc) && goodFont(lc.font)) labF.push(lc.font); if (goodFont(nc.font)) nameF.push(nc.font); });
   const labFont = modal(labF), nameFont = modal(nameF);
+  const repFill = legendFill(ws.workbook, '造窟代表', FILL.green), medFill = legendFill(ws.workbook, '醫護', FILL.yellow);
+  const labFill = (a) => (a.kind === 'rep' ? repFill : a.kind === 'medic' ? medFill : FILL.pink);
   const put = (r, c, v, fill, font) => {
     const t = ws.getRow(r).getCell(c);
     t.value = v || null;
     const st = jcl(t.style) || {};
-    st.fill = solid(fill);
+    st.fill = fill && typeof fill === 'object' ? JSON.parse(JSON.stringify(fill)) : solid(fill);
     if (v && font) st.font = jcl(font);
     st.alignment = Object.assign({}, st.alignment, { horizontal: 'center', vertical: 'middle', wrapText: false, shrinkToFit: true });
     t.style = st; // 整個樣式換成新的物件（ExcelJS 的格式物件會被多格共用，直接改會牽連別的格子）
@@ -1365,9 +1516,9 @@ function fillSeats(ws, mode, seatsIn) {
     let lab = '', nm = '', lf = null, nf = null;
     if (a) {
       const g = a.gender === '男';
-      if (mode === 'notice') { lab = a.kind === 'medic' ? '醫護' : a.kind === 'rep' ? '代表' : '保留席'; lf = a.kind === 'rep' ? FILL.peach : FILL.pink; }
+      if (mode === 'notice') { lab = a.kind === 'medic' ? '醫護' : a.kind === 'rep' ? '代表' : '保留席'; lf = labFill(a); }
       else {
-        lab = a.kin ? '保留' : (mode === 'heart' && a.wave ? CIRC(a.wave) : '') + xlLabel(a.label); lf = a.kind === 'rep' ? FILL.peach : FILL.pink;
+        lab = a.kin ? '保留' : (mode === 'heart' && a.wave ? CIRC(a.wave) : '') + xlLabel(a.label); lf = labFill(a);
         nm = a.name; nf = g ? FILL.blue : null;
       }
     } else if (mode === 'notice' && mk) {
@@ -1393,35 +1544,68 @@ function fillSlots(ws, headerRe, items, maxRow) {
   let lines = items;
   if (items.length > slots.length) { // 放不下：同一波的併成一行
     const g = new Map(); S.rows.filter((r) => items.includes(volLine(r))).forEach((r) => { const k = r.wave || 0; (g.get(k) || g.set(k, []).get(k)).push(r); });
-    lines = [...g.entries()].map(([w, rs]) => (w ? CIRC(w) : '') + rs.map((r) => [r.name, r.duty, short(r.category)].filter(Boolean).join('／')).join('、'));
+    lines = [...g.entries()].map(([w, rs]) => (w ? CIRC(w) : '') + rs.map((r) => [r.name, r.duty, short(r.category), erTag(r)].filter(Boolean).join('／')).join('、'));
   }
   slots.forEach((c, k) => { c.value = k < lines.length ? lines[k] : null; if (k < lines.length) c.style = jcl(st); });
   return true;
 }
-function volLine(r) { return [(r.mode === '上台供燈' && r.wave ? CIRC(r.wave) : '') + r.name, r.duty, short(r.category)].filter(Boolean).join('／') + (r.mode === '代供' ? `（${r.proxy || '?'} 代供）` : ''); }
+/* 義工的執事名稱；選了「二壇」身分的，備註也標「二壇」 */
+const erTag = (r) => (r.er && !/二壇/.test(r.duty || '') ? '二壇' : '');
+function volLine(r) { return [(r.mode === '上台供燈' && r.wave ? CIRC(r.wave) : '') + r.name, r.duty, short(r.category), erTag(r)].filter(Boolean).join('／') + (r.mode === '代供' ? `（${r.proxy || '?'} 代供）` : ''); }
 /* 各功德項目出席人數（心燈版右上角的小表） */
 function fillCounts(ws) {
-  const oi = S.orderInfo;
-  if (oi && oi.rows && oi.rows.length) {
+  const oi = S.orderInfo; S.badgeRange = null;
+  if (oi && oi.lamp) {
     let hh = 0, hc = 0;
-    ws.eachRow((row, rn) => { if (hh || rn > 12) return; row.eachCell((c) => { if (!hh && c.col >= 12 && /^發心項目的人數/.test(cv(c).trim())) { hh = rn; hc = c.col; } }); });
+    ws.eachRow((row, rn) => { if (hh || rn > 12) return; row.eachCell((c) => { if (!hh && c.col >= 12 && /^(發心項目的人數|統計發心項目|供燈：發心項目)/.test(cv(c).trim())) { hh = rn; hc = c.col; } }); });
     if (hh) {
-      // 這張表直接連到「供燈排序表」那邊的統計（跟你編號 12 一樣），不再自己算
-      const q = `'${oi.sheet.replace(/'/g, "''")}'`, L = (n) => String.fromCharCode(72 + n); // H, I
-      const snap = []; for (let k = 1; k <= 12; k++) snap.push([jcl(ws.getRow(hh + k).getCell(hc).style), jcl(ws.getRow(hh + k).getCell(hc + 1).style), cv(ws.getRow(hh + k).getCell(hc)).trim()]);
-      const totSt = snap.find((x) => x[2] === '總人數') || snap[snap.length - 1], bodySt = snap[0];
-      ws.getRow(hh).getCell(hc).value = { formula: `${q}!H${oi.hdr}`, result: '發心項目的人數及備燈' };
-      oi.rows.forEach((x, k) => {
-        const lc = ws.getRow(hh + 1 + k).getCell(hc), vc = ws.getRow(hh + 1 + k).getCell(hc + 1), st = x.label === '總人數' ? totSt : bodySt;
-        lc.style = jcl(st[0]); vc.style = jcl(st[1]);
-        lc.value = { formula: `${q}!H${x.row}`, result: x.label }; vc.value = { formula: `${q}!I${x.row}`, result: x.n };
+      // 連到「供燈排序表」那邊的供燈表（發心項目／功德主人數／眷屬人數／總備燈數），不再自己算
+      const q = `'${oi.sheet.replace(/'/g, "''")}'`, L = (n) => String.fromCharCode(72 + n); // H, I, J, K
+      const { hdr, mat } = oi.lamp;
+      const snap = []; for (let k = 0; k <= 12; k++) snap.push([jcl(ws.getRow(hh + k).getCell(hc).style), jcl(ws.getRow(hh + k).getCell(hc + 1).style), cv(ws.getRow(hh + k).getCell(hc)).trim()]);
+      const totSt = snap.find((x) => /^(總人數|合計)$/.test(x[2])) || snap[snap.length - 2], bodySt = snap[1], headSt = snap[0];
+      const tc = hc + 1, oldW = ws.getColumn(hc).width || 33; // 表格往右挪一欄，原本那一欄留空白（底白），才不會跟左邊的字、班級供燈代表表格黏在一起
+      const WHITE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+      const blank = (r0, r1) => { for (let r = r0; r <= r1; r++) { const c = ws.getRow(r).getCell(hc); c.value = null; c.style = { fill: WHITE }; } };
+      for (let k = 0; k <= 12; k++) for (let j = 0; j < 4; j++) { const c = ws.getRow(hh + k).getCell(tc + j); c.value = null; c.style = {}; }
+      blank(hh, hh + 12);
+      mat.forEach((rowv, k) => {
+        const st = k === 0 ? headSt : k === mat.length - 1 ? totSt : bodySt;
+        for (let j = 0; j < 4; j++) {
+          const c = ws.getRow(hh + k).getCell(tc + j);
+          c.style = jcl(j === 0 ? st[0] : st[1]); if (j) c.alignment = Object.assign({}, c.alignment, { horizontal: 'center', wrapText: true });
+          c.font = Object.assign({}, c.font, { size: TBL_FS });
+          c.value = { formula: `${q}!${L(j)}${hdr + k}`, result: rowv[j] };
+        }
       });
-      for (let k = oi.rows.length + 1; k <= 12; k++) { const lc = ws.getRow(hh + k).getCell(hc), vc = ws.getRow(hh + k).getCell(hc + 1); if (/^(總人數)$/.test(snap[k - 1][2]) || (snap[k - 1][2] && /功德主|親眷/.test(snap[k - 1][2]))) { lc.value = null; vc.value = null; } }
+      const bf = Object.assign({}, bodySt[1].font || {}, { bold: true, size: TBL_FS }); // 標題列字體跟內文一樣大
+      for (let j = 0; j < 4; j++) ws.getRow(hh).getCell(tc + j).font = bf;
+      // 胸花表：跟供燈排序表右邊那張一樣，接在供燈表下面
+      if (oi.badge) {
+        const off = oi.badge.hdr - hdr, bm = oi.badge.mat;
+        for (let k = 0; k < bm.length + 1; k++) for (let j = 0; j < 4; j++) { const c = ws.getRow(hh + off + k).getCell(tc + j); c.value = null; c.style = {}; }
+        blank(hh + off, hh + off + bm.length);
+        bm.forEach((rowv, k) => {
+          const st = k === 0 ? headSt : k === bm.length - 1 ? totSt : bodySt;
+          for (let j = 0; j < 3; j++) {
+            const c = ws.getRow(hh + off + k).getCell(tc + j);
+            c.style = jcl(j === 0 ? st[0] : st[1]); if (j) c.alignment = Object.assign({}, c.alignment, { horizontal: 'center', wrapText: true });
+            c.font = Object.assign({}, c.font, { size: TBL_FS });
+            c.value = { formula: `${q}!${L(j)}${oi.badge.hdr + k}`, result: rowv[j] };
+            if (k === 0) c.font = bf;
+          }
+        });
+        S.badgeRange = [hh + off, hh + off + bm.length - 1, hc]; // 空白隔開的那一欄不放東西，義工標記寫在姓名後面
+      }
+      ws.getColumn(tc).width = oldW; ws.getColumn(hc).width = Math.min(oldW, 12); // 第一欄放項目名稱要寬，原本那欄變空白隔開
+      [tc + 1, tc + 2, tc + 3].forEach((ci) => { if ((ws.getColumn(ci).width || 9) < 14) ws.getColumn(ci).width = 14; });
       return;
     }
   }
   const people = S.rows.filter((r) => (!r.kinOf || r.selfLamp) && !r.added && r.category);
-  const cnt = (lab) => people.filter((r) => (lab === '精舍總' ? /^精舍(副)?總/.test(r.category) : r.category.startsWith(lab))).length;
+  const hit = (lab, c) => (lab === '精舍總' ? /^精舍(副)?總/.test(c) : c.startsWith(lab));
+  // 有供燈排序表的統計就直接用那份（伉儷、同修都算），兩張表數字才會一致
+  const cnt = (lab) => (S.orderInfo && S.orderInfo.cnt ? Object.keys(S.orderInfo.cnt).filter((c) => hit(lab, c)).reduce((a, c) => a + S.orderInfo.cnt[c], 0) : people.filter((r) => hit(lab, r.category)).length);
   const seen = {};
   ws.eachRow((row, rn) => { if (rn > 12) return; row.eachCell((c) => {
     const t = cv(c).trim(), m = t.match(/^(中台總|中台副總|精舍總|福慧|莊嚴|吉祥)功德主$/);
@@ -1438,7 +1622,7 @@ function fillSidePanels(ws, mode) {
     // 心燈版跟師父版右邊用同一份「義工供燈波次」（只列跟著波次上台的義工）；不顯示事前供燈名單
     let ph = 0, pc = 0; ws.eachRow((row, rn) => row.eachCell((c) => { if (!ph && /義工先行供燈/.test(cv(c))) { ph = rn; pc = c.col; } }));
     if (ph) { for (let r = ph; r <= ph + 8; r++) { const c = ws.getRow(r).getCell(pc), t = cv(c).trim(); if (r > ph && t && !(PH.test(t) || /姓名\/義工/.test(t))) break; c.value = null; } }
-    fillSlots(ws, /義工供燈波次/, S.rows.filter((r) => r.vol && r.mode === '上台供燈').map(volLine), 13);
+    fillSlots(ws, /義工供燈波次/, S.rows.filter((r) => r.vol === '義工' && r.mode === '上台供燈').map(volLine), 13);
     fillCounts(ws);
     // 班級供燈代表：左欄班級名、右欄姓名、再右欄「義工」
     const reps = S.extras.filter((x) => x.role === '班級供燈代表' && x.name), top3 = S.extras.filter((x) => x.role === '前三班級代表' && x.name);
@@ -1448,14 +1632,43 @@ function fillSidePanels(ws, mode) {
       for (let r = hr + 1; r < (h3 || hr + 9); r++) {
         const k = cv(ws.getRow(r).getCell(hc)).trim(); if (!k) continue;
         const x = reps.find((y) => y.klass && (y.klass === k || k.startsWith(y.klass) || y.klass.startsWith(k)));
-        ws.getRow(r).getCell(hc + 1).value = x ? x.name : null; ws.getRow(r).getCell(hc + 2).value = x && x.vol ? '義工' : null;
+        const inBadge = S.badgeRange && r >= S.badgeRange[0] && r <= S.badgeRange[1] && hc + 2 === S.badgeRange[2]; // 胸花表佔了那一欄 → 義工標記改寫在姓名後面
+        ws.getRow(r).getCell(hc + 1).value = x ? x.name + (inBadge && x.vol ? '（義工）' : '') : null; if (!inBadge) ws.getRow(r).getCell(hc + 2).value = x && x.vol ? '義工' : null;
       }
+    }
+    // 點名長：只是給心燈照客看的名單小表，不排座位
+    const rolls = S.extras.filter((x) => x.role === '點名長' && x.name);
+    let hp = 0; ws.eachRow((row, rn) => { if (!hp && rn > (hr || 0) && cv(row.getCell(hc)).trim().match(/點名長$/)) hp = rn; });
+    const blockRows = (h) => { const out = []; for (let r = h + 1; r < h + 14; r++) { const t = cv(ws.getRow(r).getCell(hc)).trim(); if (!/班$/.test(t) && t !== '班級') break; out.push(r); } return out; };
+    if (hp) {
+      ws.getRow(hp).getCell(hc).value = '點名長';
+      blockRows(hp).forEach((r) => {
+        const k = cv(ws.getRow(r).getCell(hc)).trim();
+        const x = rolls.find((y) => y.klass && (y.klass === k || k.startsWith(y.klass) || y.klass.startsWith(k)));
+        ws.getRow(r).getCell(hc + 1).value = x ? x.name : null;
+      });
+    }
+    // 沒有前三班級代表：整個小表拿掉，點名長往上補（照使用者自己改過的樣式）
+    if (h3 && !top3.length) {
+      const old3 = [h3].concat(blockRows(h3));
+      const wipe = (r) => { for (let j = 0; j < 3; j++) { const c = ws.getRow(r).getCell(hc + j); c.value = null; c.style = {}; } };
+      old3.forEach(wipe);
+      if (hp && hp > h3) {
+        const src = [hp].concat(blockRows(hp));
+        src.forEach((sr, k) => {
+          const dr = h3 + k;
+          for (let j = 0; j < 3; j++) { const a = ws.getRow(sr).getCell(hc + j), b = ws.getRow(dr).getCell(hc + j); b.value = a.value; b.style = jcl(a.style); }
+          if (ws.getRow(sr).height) ws.getRow(dr).height = ws.getRow(sr).height;
+        });
+        src.forEach((sr, k) => { if (h3 + k !== sr && sr >= h3 + src.length) wipe(sr); });
+      }
+      h3 = 0;
     }
     if (h3) {
       let i = 0;
       for (let r = h3 + 1; r < h3 + 12; r++) { const kc = ws.getRow(r).getCell(hc), t = cv(kc).trim(); if (!/^班級$|班$/.test(t)) break; const x = top3[i++]; kc.value = x ? (x.klass || '') : null; ws.getRow(r).getCell(hc + 1).value = x ? x.name : null; ws.getRow(r).getCell(hc + 2).value = x && x.vol ? '義工' : null; }
     }
-  } else if (mode === 'master') fillSlots(ws, /義工供燈/, S.rows.filter((r) => r.vol && r.mode === '上台供燈').map(volLine), 13);
+  } else if (mode === 'master') fillSlots(ws, /義工供燈/, S.rows.filter((r) => r.vol === '義工' && r.mode === '上台供燈').map(volLine), 13);
 }
 /* 座位圖外觀：整張白底、關掉格線，場域外圍畫一圈黑框（參照使用者做好的總座位圖） */
 function decorateField(ws, seats, frame) {
@@ -1542,6 +1755,8 @@ function cleanSheet(ws) {
 /* 直接在使用者的原檔上填：載入原 Excel（樣板），依分頁名稱填入各張座位圖，其餘分頁刪掉 */
 
 /* 備註欄文字（義工執事、代供、不供燈…） */
+/* 功德主同時是班級供燈代表（達標代表）：備註寫「日初代表」這種短字，算人頭才不會少 */
+function repTag(name) { const x = S.extras.find((y) => y.role === '班級供燈代表' && y.name === name && y.klass); return x ? x.klass.replace(/班$/, '') + '代表' : ''; }
 function orderRemark(r) {
   const p = [];
   if (r.duty && r.duty !== '關照親眷') p.push(r.duty);
@@ -1553,6 +1768,7 @@ function orderRemark(r) {
   if (r.vol && r.mode === '代供') p.push(`${r.proxy || '?'}代供`);
   if (r.vol && r.mode === '不供燈') p.push('不供燈');
   if (!p.length && r.vol) p.push('義工');
+  if (repTag(r.name)) p.push(repTag(r.name));
   return [...new Set(p)].join('、');
 }
 /* 把供燈順序填進使用者樣板的「供燈排序表」：波次合併儲存格、伉儷合併、先行供燈放最後 */
@@ -1596,29 +1812,56 @@ function fillOrderSheet(ws) {
   merges.forEach((m) => { try { ws.mergeCells(m); } catch (e) {} });
   for (let r = 3; r <= last; r++) { ws.getRow(r).height = h3; ['A', 'B', 'C', 'D', 'E'].forEach((c) => { ws.getCell(c + r).style = jcl(st[c]); }); }
   for (let r = last + 1; r <= Math.max(60, last + 5); r++) ['A', 'B', 'C', 'D', 'E'].forEach((c) => { const x = ws.getCell(c + r); x.style = {}; });
-  // 統計「發心項目的人數及備燈」：照你編號 12 的寫法——B 欄功德項目往下帶入（合併的格子沿用上一個），逐項計數，再加「親眷」一列（自行供燈、需備燈的親眷）
-  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (cur) cnt[cur] = (cnt[cur] || 0) + 1; } }
+  // 右側統計兩張表：①供燈（發心項目／功德主人數／眷屬人數／總備燈數）②胸花（發心項目／功德主人數／總數）
+  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (cur && cur !== '親眷') cnt[cur] = (cnt[cur] || 0) + 1; } }
   S.orderInfo = { sheet: ws.name, cnt, rows: [] };
-  let hdr = 0; for (let r = 1; r <= 12; r++) if (/^發心項目的人數/.test(cv(ws.getCell('H' + r)).trim())) { hdr = r; break; }
-  if (hdr) {
-    ws.getCell('H' + hdr).value = '發心項目的人數及備燈';
-    let tot = 0, firstL = hdr + 1; for (let r = hdr + 1; r <= hdr + 14; r++) if (/^總人數$/.test(cv(ws.getCell('H' + r)).trim())) { tot = r; break; }
-    const hasKin = Object.prototype.hasOwnProperty.call(cnt, '親眷');
-    let hasKinRow = false; for (let r = firstL; r < (tot || firstL); r++) if (cv(ws.getCell('H' + r)).trim() === '親眷') hasKinRow = true;
-    if (tot && hasKin && !hasKinRow) { // 樣板還沒有「親眷」那一列：插在「總人數」前面，格式照總人數那列
-      ['H', 'I'].forEach((c) => { const from = ws.getCell(c + tot); ws.getCell(c + (tot + 1)).style = jcl(from.style); });
-      ws.getCell('H' + (tot + 1)).value = '總人數'; ws.getCell('H' + tot).value = '親眷'; ws.getRow(tot + 1).height = ws.getRow(tot).height; tot += 1;
-    }
-    const rng = `$B$3:$B$${last}`;
-    for (let r = firstL; r < (tot || hdr + 12); r++) {
-      const lab = cv(ws.getCell('H' + r)).trim(); if (!lab) continue;
-      const n = cnt[lab] || 0;
-      ws.getCell('I' + r).value = { formula: `SUMPRODUCT(--(LOOKUP(ROW(${rng}),ROW(${rng})/(${rng}<>""),${rng})=H${r}))`, result: n };
-      S.orderInfo.rows.push({ label: lab, n, row: r });
-    }
-    if (tot) { const sum = S.orderInfo.rows.reduce((a, x) => a + x.n, 0); ws.getCell('I' + tot).value = { formula: `SUM(I${firstL}:I${tot - 1})`, result: sum }; S.orderInfo.rows.push({ label: '總人數', n: sum, row: tot }); }
-  } else {
-    for (let r = 3; r <= 12; r++) { const lab = cv(ws.getCell('H' + r)).trim(); if (lab && lab in cnt || S.cfg.order.includes(lab)) ws.getCell('I' + r).value = cnt[lab] || 0; }
+  let hdr = 0; for (let r = 1; r <= 12; r++) if (/^(發心項目的人數|統計發心項目|供燈)/.test(cv(ws.getCell('H' + r)).trim())) { hdr = r; break; }
+  if (!hdr) hdr = 2;
+  {
+    // 發心項目清單：沿用樣板 H 欄的項目（沒有就用設定的次第）
+    let cats = []; for (let r = hdr + 1; r <= hdr + 14; r++) { const t = cv(ws.getCell('H' + r)).trim(); if (/^(總人數|合計)$/.test(t)) break; if (t && t !== '親眷') cats.push(t); }
+    if (!cats.length) cats = S.cfg.order.slice();
+    Object.keys(cnt).forEach((c) => { if (!cats.includes(c)) cats.push(c); });
+    const st0 = {}; ['H', 'I'].forEach((c) => { st0[c + 'h'] = jcl(ws.getCell(c + hdr).style); st0[c + 'b'] = jcl(ws.getCell(c + (hdr + 1)).style); });
+    let totR = 0; for (let r = hdr + 1; r <= hdr + 14; r++) if (/^(總人數|合計)$/.test(cv(ws.getCell('H' + r)).trim())) { totR = r; break; }
+    const stTot = totR ? { H: jcl(ws.getCell('H' + totR).style), I: jcl(ws.getCell('I' + totR).style) } : { H: st0.Hb, I: st0.Ib };
+    for (let r = hdr; r <= hdr + 40; r++) ['H', 'I', 'J', 'K'].forEach((c) => { const x = ws.getCell(c + r); x.value = null; x.style = {}; });
+    // 眷屬（自行供燈、需備燈）算在他所屬功德主的發心項目；不胸花的（自行供燈入座）要從胸花數扣掉
+    const catOf = {}; { let cur = ''; S.rows.forEach((r) => { if (!r.attached && r.category) cur = r.category; catOf[r.name] = r.attached ? cur : r.category || cur; }); }
+    const kinN = {}, noBadge = {};
+    kinSelf.forEach(({ r }) => { const c = catOf[r.kinOf] || r.category || ''; kinN[c] = (kinN[c] || 0) + 1; });
+    sonly.forEach(({ r }) => { const c = catOf[r.name] || r.category || ''; noBadge[c] = (noBadge[c] || 0) + 1; });
+    const put = (c, r, v, st, result) => { const x = ws.getCell(c + r); x.value = result === undefined ? v : { formula: v, result }; x.style = jcl(st); x.font = Object.assign({}, x.font, { size: TBL_FS }); x.alignment = Object.assign({}, x.alignment, c === 'H' ? {} : { horizontal: 'center' }); };
+    const mat = []; // 供燈表（給心燈版右上角會連到這張）
+    let r0 = hdr;
+    const hfont = Object.assign({}, jcl(st0.Hb).font || {}, { size: TBL_FS, bold: true });
+    const H1 = ['供燈', '功德主', '眷屬', '總備燈數'];
+    H1.forEach((t, j) => { put('HIJK'[j], r0, t, j ? st0.Ih : st0.Hh); ws.getCell('HIJK'[j] + r0).font = hfont; });
+    mat.push(H1);
+    let sa = 0, sb = 0;
+    cats.forEach((c, k) => {
+      const rr = hdr + 1 + k, a = cnt[c] || 0, b = kinN[c] || 0; sa += a; sb += b;
+      put('H', rr, c, st0.Hb); put('I', rr, a, st0.Ib); put('J', rr, b, st0.Ib); put('K', rr, `I${rr}+J${rr}`, st0.Ib, a + b);
+      mat.push([c, a, b, a + b]);
+    });
+    const tr = hdr + 1 + cats.length;
+    put('H', tr, '合計', stTot.H); put('I', tr, `SUM(I${hdr + 1}:I${tr - 1})`, stTot.I, sa); put('J', tr, `SUM(J${hdr + 1}:J${tr - 1})`, stTot.I, sb); put('K', tr, `SUM(K${hdr + 1}:K${tr - 1})`, stTot.I, sa + sb);
+    mat.push(['合計', sa, sb, sa + sb]);
+    S.orderInfo.lamp = { hdr, last: tr, mat };
+    // 胸花表
+    const h2 = tr + 2; let ta = 0, tb = 0;
+    const H2 = ['胸花', '功德主', '總數'];
+    H2.forEach((t, j) => { put('HIJ'[j], h2, t, j ? st0.Ih : st0.Hh); ws.getCell('HIJ'[j] + h2).font = hfont; });
+    const mat2 = [H2];
+    cats.forEach((c, k) => {
+      const rr = h2 + 1 + k, a = cnt[c] || 0, b = Math.max(0, a - (noBadge[c] || 0)); ta += a; tb += b;
+      put('H', rr, c, st0.Hb); put('I', rr, a, st0.Ib); put('J', rr, b, st0.Ib); mat2.push([c, a, b]);
+    });
+    const t2 = h2 + 1 + cats.length;
+    put('H', t2, '合計', stTot.H); put('I', t2, `SUM(I${h2 + 1}:I${t2 - 1})`, stTot.I, ta); put('J', t2, `SUM(J${h2 + 1}:J${t2 - 1})`, stTot.I, tb);
+    mat2.push(['合計', ta, tb]); S.orderInfo.badge = { hdr: h2, mat: mat2 };
+    ['J', 'K'].forEach((c) => { if ((ws.getColumn(c).width || 9) < 14) ws.getColumn(c).width = 14; });
+    const nameCol = (c) => ws.getColumn(c); void nameCol;
   }
   try { ws.pageSetup.printArea = `A1:E${last}`; } catch (e) {}
 }
@@ -1688,6 +1931,8 @@ function addChartSheetPlain(wb, title, mode) {
     const reps = S.extras.filter((x) => x.role === '班級供燈代表' && x.name);
     ws.getCell(rowN, 2).value = '班級供燈代表'; ws.getCell(rowN, 2).font = { bold: true }; rowN++;
     reps.forEach((x) => { ws.getCell(rowN, 2).value = (x.klass ? x.klass + '　' : '') + x.name; rowN++; });
+    const rolls = S.extras.filter((x) => x.role === '點名長' && x.name);
+    if (rolls.length) { rowN++; ws.getCell(rowN, 2).value = '點名長'; ws.getCell(rowN, 2).font = { bold: true }; rowN++; rolls.forEach((x) => { ws.getCell(rowN, 2).value = (x.klass ? x.klass + '　' : '') + x.name; rowN++; }); }
   }
   ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
   return ws;
@@ -1706,7 +1951,7 @@ function addOrderSheet(wb) {
     if (r.proxyFor) remark = (remark ? remark + '、' : '') + `代供 ${r.proxyFor}`;
     if (r.vol === '義工') remark = (remark ? remark + '、' : '') + (r.mode === '事前供燈' ? '事前供燈' : r.mode === '代供' ? `${r.proxy || ''} 代供` : r.mode === '不供燈' ? '義工不供燈' : '義工隨波');
     else if (r.vol === '義工入座') remark = (remark ? remark + '、' : '') + '義工入座' + (r.mode === '事前供燈' ? '、事前供燈' : r.mode === '代供' ? `、${r.proxy || ''} 代供` : r.mode === '不供燈' ? '、不供燈' : '');
-    
+    if (repTag(r.name)) remark = (remark ? remark + '、' : '') + repTag(r.name);
     const w = r.wave && r.wave !== prev ? r.wave : ''; if (r.wave) prev = r.wave;
     const row = ws.addRow([n, r.attached ? '' : r.category, r.name, remark, w]);
     if (w) row.eachCell((c) => (c.border = { top: { style: 'medium', color: { argb: 'FF8A5A2B' } } }));
@@ -1804,6 +2049,82 @@ function addSeatTableSheet(wb, list) {
   [7, 14, 10, 16].forEach((w, i) => (ws.getColumn(i + 1).width = w));
   return ws;
 }
+
+/* ---------------- 調整紀錄：存／載入你改過的東西（身分、波次、座位位置、男眾座位區），換新版不用重做 ---------------- */
+function makeRecord() {
+  return {
+    app: '普圓法會劃位器調整紀錄', v: 1, saved: new Date().toISOString(),
+    event: S.event || '', hdr: S.hdr != null ? S.hdr : null,
+    attend: S.roster.filter((r) => r.attend).map((r) => r.name),
+    edits: S.edits || {}, noSpouse: S.noSpouse || {}, kinSeat: S.kinSeat || {}, kinSelf: S.kinSelf || {}, companions: S.companions || {},
+    manualWave: !!S.manualWave, waveCaps: S.waveCaps || {},
+    extras: S.extras.map((x) => ({ name: x.name, role: x.role, klass: x.klass, gender: x.gender, chair: !!x.chair, vol: !!x.vol })),
+    rows: S.rows.map((r) => ({ name: r.name, wave: r.wave || null })),
+    seats: S.assign ? Object.fromEntries(Object.entries(S.assign).map(([c, a]) => [c, a.name])) : null,
+    marks: S.marks || {}, touched: S.touched || {},
+  };
+}
+function applyRecord(rec) {
+  if (!rec || rec.app !== '普圓法會劃位器調整紀錄') throw new Error('這不是劃位器存的調整紀錄檔');
+  if (!S.roster.length) throw new Error('請先上傳第 ① 個檔案（功德主名單）和第 ② 個檔案（本場報名名單），再載入紀錄');
+  const names = new Set(S.roster.map((r) => r.name));
+  if (rec.event) S.event = rec.event; if (rec.hdr != null) S.hdr = rec.hdr;
+  if (rec.attend && rec.attend.length) { const at = new Set(rec.attend); S.roster.forEach((r) => { r.attend = at.has(r.name); }); }
+  S.edits = rec.edits || {}; S.noSpouse = rec.noSpouse || {}; S.kinSeat = rec.kinSeat || {}; S.kinSelf = rec.kinSelf || {}; S.companions = rec.companions || {};
+  S.manualWave = !!rec.manualWave; S.waveCaps = rec.waveCaps || {};
+  (rec.extras || []).forEach((x) => {
+    const e = S.extras.find((q) => q.name === x.name && q.role === x.role);
+    if (e) { Object.assign(e, { klass: x.klass, gender: x.gender, chair: x.chair, vol: x.vol }); e.fromFile = false; e.fromReg = false; }
+    else S.extras.push(Object.assign({ isDonor: false }, x));
+  });
+  S.hist = null; S.rows = []; autoPlan();
+  if (rec.manualWave) { // 手動排過的波次和順序：照紀錄還原（名單上新增的人留在原位）
+    const idx = new Map((rec.rows || []).map((r, i) => [r.name, i])), wv = new Map((rec.rows || []).map((r) => [r.name, r.wave]));
+    S.rows.forEach((r) => { if (wv.has(r.name)) r.wave = wv.get(r.name); });
+    const units = []; S.rows.forEach((r) => { if (r.attached && units.length) units[units.length - 1].push(r); else units.push([r]); });
+    const key = (u) => { const k = u.map((x) => idx.get(x.name)).filter((x) => x != null); return k.length ? Math.min(...k) : null; };
+    const known = units.filter((u) => key(u) != null).sort((a, b) => key(a) - key(b));
+    let ki = 0; S.rows = [].concat(...units.map((u) => (key(u) != null ? known[ki++] : u)));
+    resortByWave();
+  }
+  S.pendingRec = rec; S.assign = null; S.sel = null;
+  return { missing: (rec.attend || []).filter((n) => !names.has(n)).length };
+}
+/* 排位時：先還原男眾座位區等標記，排完再把人搬回紀錄裡的座位 */
+function applyPendingMarks() {
+  const rec = S.pendingRec; if (!rec) return;
+  S.marks = Object.assign({}, rec.marks || {}); S.touched = Object.assign({}, rec.touched || {}); S.autoMarks = {};
+  Object.keys(S.marks).forEach((c) => { S.touched[c] = 1; });
+}
+function applyPendingSeats(layout, assign) {
+  const rec = S.pendingRec; if (!rec) return;
+  S.pendingRec = null;
+  const codes = new Set(layout.map((x) => x.code)), where = {};
+  Object.entries(assign).forEach(([c, a]) => { where[a.name] = c; });
+  Object.entries(rec.seats || {}).forEach(([code, name]) => {
+    const cur = where[name];
+    if (!cur || cur === code || !codes.has(code) || S.marks[code]) return;
+    const other = assign[code];
+    assign[code] = assign[cur];
+    if (other) { assign[cur] = other; where[other.name] = cur; } else delete assign[cur];
+    where[name] = code;
+  });
+}
+(function recInit() {
+  const msg = (t) => { const m = $('#recmsg'); if (m) m.textContent = t; };
+  $('#recsave').onclick = () => {
+    if (!S.roster.length) { msg('還沒有資料可以存'); return; }
+    const d = new Date(), z = (n) => String(n).padStart(2, '0');
+    saveBlob(new Blob([JSON.stringify(makeRecord())], { type: 'application/json' }), `劃位調整紀錄_${S.event || ''}_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}${z(d.getHours())}${z(d.getMinutes())}.json`);
+    msg('已下載調整紀錄');
+  };
+  $('#recload').onclick = () => $('#recfile').click();
+  $('#recfile').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { const r = applyRecord(JSON.parse(await f.text())); msg('已載入調整紀錄' + (r.missing ? `（有 ${r.missing} 位在現在的名單找不到，已略過）` : '')); render(); }
+    catch (err) { msg(''); alert(err.message || String(err)); }
+  };
+})();
 
 render();
 </script>

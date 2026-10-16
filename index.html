@@ -84,7 +84,7 @@ ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
 </head>
 <body>
 <header>
-  <h1>普圓法會-公關輔助劃位器</h1>
+  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 36 版 · 2026-10-17 更新</span></h1>
   <div class="sub">依序完成五個步驟。資料只在你的瀏覽器裡處理，不會上傳，也不會儲存；關掉視窗就清空，所以請在最後一步下載結果。</div>
   <div class="row" style="margin-top:8px;gap:8px"><button id="recsave" title="把你改過的身分、波次、座位位置、男眾座位區存成一個檔，改版或下次可以載回來">💾 儲存調整紀錄</button><button id="recload" title="載入之前存的調整紀錄（要先上傳第 ①②個檔案）">📂 載入調整紀錄</button><input type="file" id="recfile" accept=".json,application/json" style="display:none"><span class="hint" id="recmsg"></span></div>
 </header>
@@ -1083,7 +1083,7 @@ function step3() {
     <div class="row" style="gap:8px"><button id="undo" title="回到上一個動作之前">↶ 上一步</button><button id="redo" title="再做一次剛剛復原的動作">↷ 下一步</button><button id="resetp" title="波次、義工身分、親眷設定全部回到工具自動排的結果（性別、椅子不會清掉）">重排（回到自動排的結果）</button></div>
     <details class="row"><summary>規則設定（一般不用改）</summary>
       <div class="grid2"><div><div class="hint">次第順序（由前到後，一行一個功德項目）</div><textarea id="cfo" style="min-height:150px">${esc(S.cfg.order.join('\n'))}</textarea></div>
-      <div><div class="row"><label>每波人數 <input type="number" id="cfw" min="1" value="${S.cfg.waveDefault}" style="width:60px"></label><label>中台總每波 <input type="number" id="cfc" min="1" value="${S.cfg.cap1}" style="width:60px"></label></div>
+      <div><div class="row"><label>每波人數 <input type="number" id="cfw" min="1" max="8" value="${S.cfg.waveDefault}" style="width:60px"></label><label>中台總每波 <input type="number" id="cfc" min="1" value="${S.cfg.cap1}" style="width:60px"></label></div>
       <div class="hint">收波項目（這些項目結束就收波，不跟下一個項目混波；用逗號分隔）</div><textarea id="cfu" style="min-height:60px">${esc(S.cfg.cut.join(','))}</textarea>
       <div class="row"><button id="cfa">套用並重新產生預設（會清掉這一步的波次調整）</button></div></div></div></details>
     <div id="chk"></div>
@@ -1110,7 +1110,7 @@ function step3() {
       const tail = !r.attached && !uw && prevW !== null && !tailed; if (tail) tailed = true; // 最後一波之後第一列（義工／事前供燈／親眷等）：多一條分隔線
       const wsum = start ? (() => {
         const w = uw, n = waveCount(w), px = waveProxies(w), cap = waveCapOf(w), over = n > cap;
-        const opts = [1, 2, 3, 4, 5].filter((x) => x <= Math.max(4, S.cfg.waveDefault)).map((x) => `<option ${x === cap ? 'selected' : ''}>${x}</option>`).join('');
+        const opts = [1, 2, 3, 4, 5, 6, 7, 8].map((x) => `<option ${x === cap ? 'selected' : ''}>${x}</option>`).join('');
         return `<tr class="wsum"><td colspan="11" style="background:${over ? '#fde2e0' : '#f4efe8'};font-size:12px;padding:3px 8px"><b>第 ${w} 波　${n}/${n + px.length}</b>（上台 ${n} 人／名單 ${n + px.length} 人${px.length ? '，含代供：' + esc(px.map((x) => x.name + '→' + (x.proxy || '？')).join('、')) : ''}）　本波上台人數上限 <select data-wcap="${w}">${opts}</select>${over ? '　<span style="color:#b00">⚠ 超過上限，請確認是否有人要標代供</span>' : ''}</td></tr>`;
       })() : '';
       const cls = (r.wave ? 'w' + (r.wave % 2) : uw ? 'w' + (uw % 2) : 'pre') + (start || tail ? ' wstart' : '');
@@ -1245,7 +1245,7 @@ function step3() {
   };
   $('#cfa').onclick = () => {
     const o = $('#cfo').value.split(/\n+/).map((x) => x.trim()).filter(Boolean);
-    S.cfg.order = o.length ? o : DEFAULT_ORDER.slice(); S.cfg.waveDefault = +$('#cfw').value || 4; S.cfg.cap1 = +$('#cfc').value || 1;
+    S.cfg.order = o.length ? o : DEFAULT_ORDER.slice(); S.cfg.waveDefault = Math.min(8, +$('#cfw').value || 4); S.cfg.cap1 = +$('#cfc').value || 1;
     S.cfg.cut = $('#cfu').value.split(/[,，、\s]+/).filter(Boolean); S.assign = null; save(); S.waveCaps = {}; autoPlan(); step3();
   };
   const volBox = () => {
@@ -1680,6 +1680,7 @@ function fillSidePanels(ws, mode) {
     fillSlots(ws, /義工供燈波次/, S.rows.filter((r) => r.vol === '義工' && r.mode === '上台供燈').map(volLine), 13);
     fillCounts(ws);
     // 班級供燈代表：左欄班級名、右欄姓名、再右欄「義工」
+    const repVol = (x) => !!x.vol || S.rows.some((r) => r.name === x.name && r.vol); // 代表本身也是功德主：第 3 步設成義工的，也要標
     const reps = S.extras.filter((x) => x.role === '班級供燈代表' && x.name), top3 = S.extras.filter((x) => x.role === '前三班級代表' && x.name);
     let hr = 0, hc = 0, h3 = 0;
     ws.eachRow((row, rn) => row.eachCell((c) => { const v = cv(c).trim(); if (v === '班級供燈代表') { hr = rn; hc = c.col; } if (v === '前三班級代表') h3 = rn; }));
@@ -1688,7 +1689,7 @@ function fillSidePanels(ws, mode) {
         const k = cv(ws.getRow(r).getCell(hc)).trim(); if (!k) continue;
         const x = reps.find((y) => y.klass && (y.klass === k || k.startsWith(y.klass) || y.klass.startsWith(k)));
         const inBadge = S.badgeRange && r >= S.badgeRange[0] && r <= S.badgeRange[1] && hc + 2 === S.badgeRange[2]; // 胸花表佔了那一欄 → 義工標記改寫在姓名後面
-        ws.getRow(r).getCell(hc + 1).value = x ? x.name + (inBadge && x.vol ? '（義工）' : '') : null; if (!inBadge) ws.getRow(r).getCell(hc + 2).value = x && x.vol ? '義工' : null;
+        ws.getRow(r).getCell(hc + 1).value = x ? x.name + (inBadge && repVol(x) ? '（義工）' : '') : null; if (!inBadge) ws.getRow(r).getCell(hc + 2).value = x && repVol(x) ? '義工' : null;
       }
     }
     // 點名長：只是給心燈照客看的名單小表，不排座位
@@ -1721,7 +1722,7 @@ function fillSidePanels(ws, mode) {
     }
     if (h3) {
       let i = 0;
-      for (let r = h3 + 1; r < h3 + 12; r++) { const kc = ws.getRow(r).getCell(hc), t = cv(kc).trim(); if (!/^班級$|班$/.test(t)) break; const x = top3[i++]; kc.value = x ? (x.klass || '') : null; ws.getRow(r).getCell(hc + 1).value = x ? x.name : null; ws.getRow(r).getCell(hc + 2).value = x && x.vol ? '義工' : null; }
+      for (let r = h3 + 1; r < h3 + 12; r++) { const kc = ws.getRow(r).getCell(hc), t = cv(kc).trim(); if (!/^班級$|班$/.test(t)) break; const x = top3[i++]; kc.value = x ? (x.klass || '') : null; ws.getRow(r).getCell(hc + 1).value = x ? x.name : null; ws.getRow(r).getCell(hc + 2).value = x && repVol(x) ? '義工' : null; }
     }
   } else if (mode === 'master') fillSlots(ws, /義工供燈/, S.rows.filter((r) => r.vol === '義工' && r.mode === '上台供燈').map(volLine), 13);
 }

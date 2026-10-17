@@ -84,7 +84,7 @@ ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
 </head>
 <body>
 <header>
-  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 36 版 · 2026-10-17 更新</span></h1>
+  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 38 版 · 2026-10-17 更新</span></h1>
   <div class="sub">依序完成五個步驟。資料只在你的瀏覽器裡處理，不會上傳，也不會儲存；關掉視窗就清空，所以請在最後一步下載結果。</div>
   <div class="row" style="margin-top:8px;gap:8px"><button id="recsave" title="把你改過的身分、波次、座位位置、男眾座位區存成一個檔，改版或下次可以載回來">💾 儲存調整紀錄</button><button id="recload" title="載入之前存的調整紀錄（要先上傳第 ①②個檔案）">📂 載入調整紀錄</button><input type="file" id="recfile" accept=".json,application/json" style="display:none"><span class="hint" id="recmsg"></span></div>
 </header>
@@ -668,6 +668,18 @@ function applyRegistration() {
       S.regByName[x.name] = x; matched.add(x.name); unmatched.splice(ui, 1);
     }
   }
+  // 功德主本人沒來（沒打 V）、但「關聯親眷」寫了「名字(親眷)」＝由親眷代表來：親眷有座位、備燈、不唱名、不隨波次、不胸花，列在供燈排序表後面（算那位功德主的發心項目）
+  S.absentKin = {};
+  if (R.structured) R.rows.forEach((x) => {
+    if (x.role || x.reg || x.neg || !names.has(x.name)) return;
+    parseKin(x.kin).forEach((k) => {
+      if (!/親眷/.test(k.tag) || k.name === x.name) return;
+      if (S.roster.some((q) => q.name === k.name && q.seq)) return;
+      const pi = S.roster.findIndex((q) => q.name === x.name && q.seq); if (pi < 0) return;
+      if (!S.roster.some((q) => q.name === k.name)) S.roster.splice(pi + 1, 0, { seq: '', name: k.name, category: '', gender: '', chair: false, note: '', notes: '備燈、不唱名、不隨波次、不胸花', kin: [], seatwith: '', attend: true });
+      S.regByName[k.name] = { name: k.name, reg: true, duty: '', kin: '' }; matched.add(k.name); S.absentKin[k.name] = x.name;
+    });
+  });
   // 關聯親眷括號裡寫了義工執事（例如「胡維桓(學員·司儀)」）→ 那位親眷就是義工：不排座位、依執事決定供燈方式；不在功德主名單的，就補一列跟在這位功德主後面
   if (R.structured) {
     const known = new Set(['司儀', '心燈', '助唱', '照客', '攝影', '錄影', '攝像', '資料文書組', '執秘', '音響視訊', '總指揮', '副總指揮', '義工']);
@@ -679,14 +691,14 @@ function applyRegistration() {
         const d = dutyOfTag(k.tag);
         if (!d || k.name === x.name) return;
         const had = S.regByName[k.name];
-        if (had) { if (!had.duty) S.regByName[k.name] = Object.assign({}, had, { duty: d }); return; }
+        if (had) { if (!had.duty) S.regByName[k.name] = Object.assign({}, had, { duty: d, student: /學員/.test(k.tag) }); return; }
         const pi = S.roster.findIndex((q) => q.name === x.name && matched.has(q.name));
-        if (names.has(k.name)) { if (matched.has(k.name)) S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '' }; return; }
+        if (names.has(k.name)) { if (matched.has(k.name)) S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '', student: /學員/.test(k.tag) }; return; }
         if (pi < 0) return;
         let at = pi + 1; while (at < S.roster.length && !S.roster[at].seq && S.roster[at].attend) at++;
         const q = S.roster[pi];
         S.roster.splice(at, 0, { seq: '', name: k.name, category: '', gender: q.gender === '女' ? '男' : q.gender === '男' ? '女' : '', chair: false, note: '', notes: '', kin: [], seatwith: '', attend: true });
-        S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '' }; matched.add(k.name); names.add(k.name);
+        S.regByName[k.name] = { name: k.name, reg: true, duty: d, kin: '', student: /學員/.test(k.tag) }; matched.add(k.name); names.add(k.name);
       });
     });
   }
@@ -783,7 +795,8 @@ function autoPlan() {
     const duty = reg.duty || '';
     const kin = parseKin(reg.kin).filter((k) => !/功德主/.test(k.tag) && !att.some((x) => x.name === k.name)).map((k) => k.name);
     // 有義工執事＝預設不排座位。供燈方式：有眷屬一起來→眷屬代供；心燈／司儀／助唱→事前供燈；攝影／錄影→代供（要選代供人）；其他→上台供燈
-    const mode0 = kin.length ? '代供' : /(心燈|司儀|助唱)/.test(duty) ? '事前供燈' : /(攝影|錄影|攝像)/.test(duty) ? '代供' : '上台供燈';
+    const student = !!reg.student && !r.seq; // 關聯親眷寫「(學員·司儀)」、又不是自己有席次的功德主：只是來當義工，不排座位、不給燈
+    const mode0 = student ? '不供燈' : kin.length ? '代供' : /(心燈|司儀|助唱)/.test(duty) ? '事前供燈' : /(攝影|錄影|攝像)/.test(duty) ? '代供' : '上台供燈';
     const ne = noteEr(r); ne.kinEr.forEach((k) => { S.noteKinEr[k] = true; });
     const auto = duty ? { vol: '義工', nw: mode0 === '事前供燈', er: /二壇/.test(duty) || ne.self, mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' }
       : ne.self ? { vol: '義工', nw: false, er: true, mode: '上台供燈', proxy: '' }
@@ -1485,10 +1498,11 @@ function auditNamesHtml() {
   const seated = Object.values(S.assign || {}).map((a) => a.name), sdup = seated.filter((n, i) => seated.indexOf(n) !== i);
   const why = (r) => r.proxyFor ? `代供人，代供 ${r.proxyFor}，不另算燈` : r.companion ? `同行供燈，跟 ${r.kinOf} 一起供，不另算燈、不胸花` : r.selfLamp ? `${r.kinOf} 的眷屬自行供燈，算眷屬 1 盞` : r.auto ? '自動補的同修，算一盞' : r.kinOf ? `${r.kinOf} 的眷屬` : '不在出席名單';
   // 燈數、胸花數（獨立於 Excel 輸出再算一次，下載後可和 Excel 上的表對照）
-  const donorN = inSheet.filter((r) => !r.selfLamp && !r.proxyFor && !r.companion).length, kinLamp = inSheet.filter((r) => r.selfLamp).length, noBadge = inSheet.filter((r) => r.seatOnly && !r.selfLamp).length;
+  const donorN = inSheet.filter((r) => !r.selfLamp && !r.proxyFor && !r.companion && !(r.vol && r.mode === '不供燈')).length, kinLamp = inSheet.filter((r) => r.selfLamp).length, noBadge = inSheet.filter((r) => r.seatOnly && !r.selfLamp).length;
   const bad = missing.length || dup.length || sdup.length;
   const lines = [`本場出席 <b>${att.length}</b> 位 → 供燈排序表 <b>${sn.length}</b> 位${!missing.length && !extra.length ? '，名單完全一致 ✓' : ''}`];
   lines.push(`備燈：功德主 <b>${donorN}</b> 盞 + 眷屬自行供燈 <b>${kinLamp}</b> 盞 = 總備燈 <b>${donorN + kinLamp}</b> 盞；胸花 <b>${donorN - noBadge}</b> 朵${noBadge ? `（${noBadge} 位自行供燈入座不胸花）` : ''}`);
+  { const nl = inSheet.filter((r) => r.vol && r.mode === '不供燈'); if (nl.length) lines.push(`不供燈（不算燈、不胸花）：${esc(nl.map((r) => r.name).join('、'))}`); }
   if (missing.length) lines.push(`<b style="color:#b00">出席但供燈排序表沒有：${esc(missing.join('、'))}</b>`);
   if (extra.length) lines.push(`供燈排序表多出的 ${extra.length} 位不是報名／出席名單上的人：${esc(extra.map((r) => r.name + '（' + why(r) + '）').join('、'))}`);
   if (dup.length) lines.push(`<b style="color:#b00">供燈排序表姓名重複：${esc([...new Set(dup)].join('、'))}</b>`);
@@ -1823,6 +1837,7 @@ function orderRemark(r) {
   if (r.seatOnly) p.push(...(r.selfLamp ? [] : ['自行供燈（需備燈）']), '不唱名', '不胸花');
   if (r.vol && r.mode === '代供') p.push(`${r.proxy || '?'}代供`);
   if (r.vol && r.mode === '不供燈') p.push('不供燈');
+  if ((S.absentKin || {})[r.name]) p.push(`${S.absentKin[r.name]}的親眷（本人未到）`);
   if (!p.length && r.vol) p.push('義工');
   if (repTag(r.name)) p.push(repTag(r.name));
   return [...new Set(p)].join('、');
@@ -1872,7 +1887,7 @@ function fillOrderSheet(ws) {
   for (let r = last + 1; r <= Math.max(60, last + 5); r++) ['A', 'B', 'C', 'D', 'E'].forEach((c) => { const x = ws.getCell(c + r); x.style = {}; });
   // 右側統計兩張表：①供燈（發心項目／功德主人數／眷屬人數／總備燈數）②胸花（發心項目／功德主人數／總數）
   // 燈數：每位功德主 1 盞。代供人、「＋」加進來一起供燈的眷屬只是幫功德主供，不另外備燈、不胸花。眷屬代供人（不在功德主名單）只是幫人供，那一盞已算在被代供的人身上，不另外算；眷屬自行供燈的另算在「眷屬」欄
-  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (rowOf[r] && (rowOf[r].proxyFor || rowOf[r].companion)) continue; if (cur && cur !== '親眷') cnt[cur] = (cnt[cur] || 0) + 1; } }
+  const cnt = {}; { let cur = ''; for (let r = 3; r <= last; r++) { const b = cv(ws.getCell('B' + r)).trim(); if (b) cur = b; if (rowOf[r] && (rowOf[r].proxyFor || rowOf[r].companion || (rowOf[r].vol && rowOf[r].mode === '不供燈'))) continue; if (cur && cur !== '親眷') cnt[cur] = (cnt[cur] || 0) + 1; } }
   S.orderInfo = { sheet: ws.name, cnt, rows: [] };
   let hdr = 0; for (let r = 1; r <= 12; r++) if (/^(發心項目的人數|統計發心項目|供燈)/.test(cv(ws.getCell('H' + r)).trim())) { hdr = r; break; }
   if (!hdr) hdr = 2;
@@ -2017,7 +2032,7 @@ function addOrderSheet(wb) {
   });
   [6, 16, 16, 28, 10].forEach((w, i) => (ws.getColumn(i + 1).width = w));
   // 統計發心項目的人數（同你的樣板）
-  const cnt = {}; S.rows.forEach((r) => { if (r.kinOf && r.noLamp && !r.selfLamp) return; cnt[r.category] = (cnt[r.category] || 0) + 1; });
+  const cnt = {}; S.rows.forEach((r) => { if (r.kinOf && r.noLamp && !r.selfLamp) return; if (r.vol && r.mode === '不供燈') return; cnt[r.category] = (cnt[r.category] || 0) + 1; });
   ws.getCell('H2').value = '統計發心項目的人數'; ws.getCell('H2').font = { bold: true };
   S.cfg.order.forEach((c, i) => { ws.getCell(3 + i, 8).value = c; ws.getCell(3 + i, 9).value = cnt[c] || 0; });
   ws.getCell(3 + S.cfg.order.length, 8).value = '總人數'; ws.getCell(3 + S.cfg.order.length, 9).value = { formula: `SUM(I3:I${2 + S.cfg.order.length})` };

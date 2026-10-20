@@ -84,7 +84,7 @@ ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
 </head>
 <body>
 <header>
-  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 38 版 · 2026-10-17 更新</span></h1>
+  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 39 版 · 2026-10-20 更新</span></h1>
   <div class="sub">依序完成五個步驟。資料只在你的瀏覽器裡處理，不會上傳，也不會儲存；關掉視窗就清空，所以請在最後一步下載結果。</div>
   <div class="row" style="margin-top:8px;gap:8px"><button id="recsave" title="把你改過的身分、波次、座位位置、男眾座位區存成一個檔，改版或下次可以載回來">💾 儲存調整紀錄</button><button id="recload" title="載入之前存的調整紀錄（要先上傳第 ①②個檔案）">📂 載入調整紀錄</button><input type="file" id="recfile" accept=".json,application/json" style="display:none"><span class="hint" id="recmsg"></span></div>
 </header>
@@ -472,7 +472,7 @@ function parseRosterSheet(ws) {
     if (!name) continue;
     const g = (k) => (m[k] ? cell(ws, r, m[k]) : '');
     const notes = [g('備註'), g('備註2'), g('備註3')];
-    const kin = g('眷屬').split(/[、,，\/\s]+/).filter(Boolean);
+    const kin = g('眷屬').split(/[、,，\/\s]+/).filter((x) => x && !notKinName(x));
     out.push({ _r: r, seq: cell(ws, r, cSeq), name, category: cCat ? cell(ws, r, cCat) : '', gender: g('性別'),
       chair: g('座位椅子').toLowerCase() === 'v' || notes.some((x) => /椅/.test(x)), note: g('備註'), notes: notes.filter(Boolean).join(' '), kin, seatwith: g('座位關聯') });
   }
@@ -632,8 +632,10 @@ function parseKin(raw) {
   return (raw || '').split(/[、,，;；\/\n]+/).map((x) => x.trim()).filter(Boolean).map((x) => {
     const m = x.match(/^(.*?)\s*[\(（]([^)）]*)[\)）]\s*$/);
     return { name: (m ? m[1] : x).replace(/\s/g, ''), tag: m ? m[2] : '' };
-  }).filter((k) => k.name);
+  }).filter((k) => k.name && !notKinName(k.name));
 }
+/* 親眷欄有時寫的是說明文字（例如「不用座位」「不上台供燈」），不是人名，不能當成一位親眷 */
+const notKinName = (n) => /(座位|不用|不需|不要|供燈|義工|執事|備註|待定|未定|同上)|^(無|沒有|[-－—–?？]+)$/.test(n);
 function applyRegistration() {
   const R = S.regCells, names = new Set(S.roster.map((r) => r.name));
   const matched = new Set(), unmatched = [];

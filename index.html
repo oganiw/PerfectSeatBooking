@@ -33,6 +33,12 @@ main{max-width:1280px;margin:14px auto 60px;padding:0 24px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px 22px}
 .panel h2{margin:0 0 6px;font-size:17px}
 .how{color:var(--muted);font-size:13px;margin:0 0 14px}
+.tip{display:inline-block;vertical-align:middle;margin-left:6px}
+.tip>summary{display:inline-flex;align-items:center;justify-content:center;list-style:none;cursor:pointer;width:18px;height:18px;border:1px solid var(--accent);border-radius:50%;color:var(--accent);font-size:12px;font-weight:700;line-height:1;user-select:none}
+.tip>summary::-webkit-details-marker{display:none}
+.tip[open]{display:block;margin:6px 0 0}
+.tip[open]>summary{background:var(--accent);color:var(--accent-ink)}
+.tip .tipbody{margin-top:6px;padding:8px 12px;background:var(--accent-soft);border-radius:8px;color:var(--ink);font-size:13px;font-weight:400;line-height:1.7}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
 button,.btn{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
 button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -84,8 +90,8 @@ ul.clean{margin:4px 0;padding-left:20px;font-size:13px}
 </head>
 <body>
 <header>
-  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 39 版 · 2026-10-20 更新</span></h1>
-  <div class="sub">依序完成五個步驟。資料只在你的瀏覽器裡處理，不會上傳，也不會儲存；關掉視窗就清空，所以請在最後一步下載結果。</div>
+  <h1>普圓法會-公關輔助劃位器 <span style="font-size:11px;font-weight:400;color:var(--muted);letter-spacing:0;margin-left:6px">第 42 版 · 2026-10-20 更新</span></h1>
+  <div class="sub">資料只在你的瀏覽器處理，不上傳、不儲存；請在第 5 步下載結果，關掉視窗就清空。</div>
   <div class="row" style="margin-top:8px;gap:8px"><button id="recsave" title="把你改過的身分、波次、座位位置、男眾座位區存成一個檔，改版或下次可以載回來">💾 儲存調整紀錄</button><button id="recload" title="載入之前存的調整紀錄（要先上傳第 ①②個檔案）">📂 載入調整紀錄</button><input type="file" id="recfile" accept=".json,application/json" style="display:none"><span class="hint" id="recmsg"></span></div>
 </header>
 <div class="steps" id="steps"></div>
@@ -413,6 +419,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 <script>
 const E = SeatEngine;
 const $ = (s, r = document) => r.querySelector(s);
+/* ⓘ 說明：平常收起來，點一下展開；必要的提示（紅框、警告）不收 */
+const tip = (h) => `<details class="tip"><summary title="說明">i</summary><div class="tipbody">${h}</div></details>`;
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /* ---------------- state ---------------- */
@@ -796,11 +804,13 @@ function autoPlan() {
     const reg = (S.regByName || {})[r.name] || {};
     const duty = reg.duty || '';
     const kin = parseKin(reg.kin).filter((k) => !/功德主/.test(k.tag) && !att.some((x) => x.name === k.name)).map((k) => k.name);
-    // 有義工執事＝預設不排座位。供燈方式：有眷屬一起來→眷屬代供；心燈／司儀／助唱→事前供燈；攝影／錄影→代供（要選代供人）；其他→上台供燈
+    // 有義工執事＝預設不排座位、事前供燈（不進波次）。例外：有親眷一起來（關聯親眷、同戶的人）→留在原來的波次：關聯親眷→代供；攝影／錄影→代供（要選代供人）；其他→上台供燈，等他自己選代供或自行供燈
     const student = !!reg.student && !r.seq; // 關聯親眷寫「(學員·司儀)」、又不是自己有席次的功德主：只是來當義工，不排座位、不給燈
-    const mode0 = student ? '不供燈' : kin.length ? '代供' : /(心燈|司儀|助唱)/.test(duty) ? '事前供燈' : /(攝影|錄影|攝像)/.test(duty) ? '代供' : '上台供燈';
+    const hasFam = kin.length > 0 || attached || !!(nxt && !nxt.seq && nxt.attend && !((S.regByName || {})[nxt.name] || {}).student); // 有親眷：關聯親眷，或同戶有人（伉儷、眷屬）一起來
+    const erDuty = /二壇/.test(duty) || noteEr(r).self;
+    const mode0 = student ? '不供燈' : kin.length ? '代供' : (hasFam || erDuty) ? (/(攝影|錄影|攝像)/.test(duty) ? '代供' : '上台供燈') : '事前供燈';
     const ne = noteEr(r); ne.kinEr.forEach((k) => { S.noteKinEr[k] = true; });
-    const auto = duty ? { vol: '義工', nw: mode0 === '事前供燈', er: /二壇/.test(duty) || ne.self, mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' }
+    const auto = duty ? { vol: '義工', nw: false, er: /二壇/.test(duty) || ne.self, mode: mode0, proxy: mode0 === '代供' && kin.length ? kin[0] : '' }
       : ne.self ? { vol: '義工', nw: false, er: true, mode: '上台供燈', proxy: '' }
       : (/備燈/.test(r.notes || '') && /(不唱名|不胸花|不隨(功德)?波次)/.test(r.notes || '')) ? { seatOnly: true, vol: '', mode: '', proxy: '' } : {}; // 備註寫「要排位子、備燈／不唱名、不隨功德波次、不胸花」＝自行供燈入座
     const p = toPerson(Object.assign({}, r, auto, ed), { category: r.category || (r.seq ? '' : lastHead), attached, noAutoSpouse: !!(nxt && !nxt.seq) || !r.seq || !!(S.noSpouse || {})[r.name] || regLoaded(), kin, duty });
@@ -962,15 +972,15 @@ function step1() {
   const ok = S.roster.length > 0 && S.layoutOpts.length > 0;
   $('#main').innerHTML = `<div class="panel">
     <h2>第 1 步：上傳你現有的 Excel</h2>
-    <p class="how">不用另外填表，直接用你平常維護的檔案。功德主名單和本場名單分開上傳，下一期功德主有變動時，只要換第 ① 個檔案。</p>
+    <div class="how">上傳你平常維護的三個檔案，不用另外填表。${tip('功德主名單和本場名單分開上傳；下一期功德主有變動時，只要換第 ① 個檔案。')}</div>
     <div class="grid2">
-      <div class="note" style="background:var(--accent-soft)"><b>① 所有功德主發心名單</b><br><span class="hint">有「席次、功德項目、功德主、性別、座位椅子…」欄位的那份（例如「功德主名單(全)」）</span>
+      <div class="note" style="background:var(--accent-soft)"><b>① 所有功德主發心名單</b><br><span class="hint">例如「功德主名單(全)」</span>${tip('有「席次、功德項目、功德主、性別、座位椅子…」欄位的那一份。')}
         <div class="row"><input type="file" id="f1" accept=".xlsx"></div><div id="i1"></div></div>
-      <div class="note" style="background:var(--accent-soft)"><b>② 這一場參加的名單</b><br><span class="hint">報名後有參加的功德主。格式不限：有「姓名／功德主」欄就讀那一欄，否則整份掃描</span>
+      <div class="note" style="background:var(--accent-soft)"><b>② 這一場參加的名單</b><br><span class="hint">報名後有參加的名單</span>${tip('格式不限：有「姓名／功德主」欄就讀那一欄，否則整份掃描。')}
         <div class="row"><input type="file" id="f2" accept=".xlsx"></div><div id="i2"></div>
         <div class="row" id="r2"></div></div>
     </div>
-    <div class="note" style="background:var(--accent-soft)"><b>③ 佈場圖（你現有的座位圖檔）</b><br><span class="hint">可以直接用下面的下拉選已上傳檔案裡的「空白佈場圖」分頁，不用再上傳；也可以另外上傳。工具會從格子顏色判斷拜墊／椅子。如果有「當周代表名單」分頁，也會一併讀進來。</span>
+    <div class="note" style="background:var(--accent-soft)"><b>③ 佈場圖（你現有的座位圖檔）</b><br><span class="hint">可直接選已上傳檔案裡的「空白佈場圖」分頁</span>${tip('不用再上傳，也可以另外上傳。工具會從格子顏色判斷拜墊／椅子；如果有「當周代表名單」分頁，也會一併讀進來。')}
       <div class="row"><input type="file" id="f3" accept=".xlsx"></div><div id="i3"></div></div>
     ${nav(false, '下一步：確認本場出席', ok)}
   </div>`;
@@ -1015,9 +1025,9 @@ function step2() {
   const n = S.roster.filter((r) => r.attend).length;
   $('#main').innerHTML = `<div class="panel">
     <h2>第 2 步：確認本場出席</h2>
-    <p class="how">已依第 ② 個檔案勾好出席。可以在這裡手動增減；也可以直接貼姓名清單（一行一位）。需要關照的親眷，只要在名單裡勾起來就會一起排。</p>
+    <div class="how">已依報名名單勾好出席，可手動增減。${tip('也可以直接貼姓名清單（一行一位）。需要關照的親眷，只要在名單裡勾起來就會一起排。')}</div>
     <div class="row"><label>本場名稱 <input type="text" id="ev" value="${esc(S.event)}" placeholder="例如 1018" size="10"></label>
-      <label><input type="checkbox" id="fl" ${S.follow ? 'checked' : ''}> 席次空白的同戶列（伉儷、眷屬）也一起算出席（有報名名單時請不要勾，以報名名單為準）</label></div>
+      <label><input type="checkbox" id="fl" ${S.follow ? 'checked' : ''}> 席次空白的同戶列也算出席</label>${tip('同戶列＝伉儷、眷屬。有報名名單時請不要勾，以報名名單為準。')}</div>
     <details class="row"><summary>貼上姓名清單</summary>
       <textarea id="paste" placeholder="貼上姓名，一行一位"></textarea>
       <div class="row"><button id="ap">套用（取代目前勾選）</button><button id="clr">清除全部勾選</button></div><div id="pr"></div></details>
@@ -1025,7 +1035,7 @@ function step2() {
     <div class="row"><input type="text" id="q" placeholder="搜尋姓名或功德項目" size="24"></div>
     <div class="tablewrap" style="max-height:340px"><table><thead><tr><th>出席</th><th>席次</th><th>姓名</th><th>功德項目</th><th>性別</th><th>椅子</th><th>備註</th></tr></thead><tbody id="tb"></tbody></table></div>
     <h3 style="margin:18px 0 4px;font-size:15px">本場代表與醫護</h3>
-    <p class="how">班級供燈代表、前三班級代表來自「當周代表名單」。代表若同時是本場功德主，只排一個座位。醫護若不是功德主，排在所有人之後，坐最外側（靠邊）的位子。請補上代表的性別，沒填的會暫排西單。</p>
+    <div class="how">請補上代表的性別，沒填的會暫排西單。${tip('班級供燈代表、前三班級代表來自「當周代表名單」。代表若同時是本場功德主，只排一個座位。醫護若不是功德主，排在所有人之後，坐最外側（靠邊）的位子。')}</div>
     <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>姓名</th><th>類別</th><th>班級</th><th>性別</th><th>椅子</th><th>義工（不排位）</th><th></th></tr></thead><tbody id="xb"></tbody></table></div>
     <div class="row"><button id="addx">＋ 新增一列</button></div>
     ${nav(true, '下一步：產生供燈設定表', n > 0)}
@@ -1094,8 +1104,8 @@ function step3() {
   const nWaves = Math.max(0, ...S.rows.map((r) => r.wave || 0));
   $('#main').innerHTML = `<div class="panel">
     <h2>第 3 步：供燈設定表（先確認波次，再排位）</h2>
-    <p class="how">工具已依次第順序產生預設。請檢查：①性別（紅框＝缺）②義工的供燈方式與代供人。波次可以直接改數字，或用 ↑↓ 移動整戶；把某人移到某一波後，後面的波次會自動重排。</p>
-    <div class="row" style="gap:8px"><button id="undo" title="回到上一個動作之前">↶ 上一步</button><button id="redo" title="再做一次剛剛復原的動作">↷ 下一步</button><button id="resetp" title="波次、義工身分、親眷設定全部回到工具自動排的結果（性別、椅子不會清掉）">重排（回到自動排的結果）</button></div>
+    <div class="how">請檢查：①性別（紅框＝缺）②義工的供燈方式與代供人。${tip('工具已依次第順序產生預設。波次可以直接改數字，或用 ↑↓ 移動整戶；把某人移到某一波後，後面的波次會自動重排。')}</div>
+    <div class="row" style="gap:8px"><button id="undo" title="回到上一個動作之前">↶ 上一步</button><button id="redo" title="再做一次剛剛復原的動作">↷ 下一步</button><button id="resetp" title="波次、義工身分、親眷設定全部回到工具自動排的結果（性別、椅子不會清掉）">重排（回到自動排的結果）</button><button id="imp" title="匯入第 5 步「只下載供燈順序表」下載、改過的那份 Excel">匯入供燈順序表</button><input type="file" id="impf" accept=".xlsx" style="display:none">${tip('第 5 步「只下載供燈順序表」下載的 Excel，改完可以在這裡匯入：可改波次數字、同一波內的順序、性別、椅子、義工、供燈方式、代供人。不在工具名單裡的人不會被加入。匯入後第 4 步的座位會依新順序重排；要保留目前座位，請先按頁首「💾 儲存調整紀錄」。')}</div>
     <details class="row"><summary>規則設定（一般不用改）</summary>
       <div class="grid2"><div><div class="hint">次第順序（由前到後，一行一個功德項目）</div><textarea id="cfo" style="min-height:150px">${esc(S.cfg.order.join('\n'))}</textarea></div>
       <div><div class="row"><label>每波人數 <input type="number" id="cfw" min="1" max="8" value="${S.cfg.waveDefault}" style="width:60px"></label><label>中台總每波 <input type="number" id="cfc" min="1" value="${S.cfg.cap1}" style="width:60px"></label></div>
@@ -1248,8 +1258,8 @@ function step3() {
     const up = S.rows.filter((r) => r.wave && isUp(r)).length, vols = S.rows.filter((r) => r.vol).length;
     let h = S.regCells ? '' : '<div class="note warn">⚠ 尚未上傳「已報名名單」，義工執事不會帶入、也不會自動標義工。請回第 1 步上傳。</div>';
     h += `<div class="note ok">本場 ${S.rows.length} 人：共 ${nWaves} 波，上台供燈 ${up} 人，義工 ${vols} 人。</div>`;
-    if (miss) h += `<div class="note warn">${miss} 位沒有性別（紅框）。沒填的會暫排${'西'}單，建議補上。</div>`;
-    if (nop) h += `<div class="note warn">${nop} 位義工選了「代供」但沒有指定代供人（紅框）。沒選之前，那一波可能會多一人或少一人。</div>`;
+    if (miss) h += `<div class="note warn">${miss} 位沒有性別（紅框），暫排西單，建議補上。</div>`;
+    if (nop) h += `<div class="note warn">${nop} 位義工選了「代供」但沒有指定代供人（紅框）。${tip('沒選之前，那一波可能會多一人或少一人。')}</div>`;
     const odd = []; for (let w = 1; w <= nWaves; w++) { const n = waveCount(w); if (n > waveCapOf(w)) odd.push(`第 ${w} 波 ${n}/${waveCapOf(w)}`); }
     if (odd.length) h += `<div class="note warn">上台人數超過上限的波次：${esc(odd.join('、'))}。若有人是由別人代供，請在「供燈方式」選代供並填代供人。</div>`;
     const rn = new Set(S.rows.map((x) => x.name));
@@ -1266,7 +1276,7 @@ function step3() {
   const volBox = () => {
     const vs = S.rows.filter((r) => r.duty || r.vol);
     const byDuty = {}; vs.forEach((r) => { const k = r.duty || '(自行標記)'; byDuty[k] = (byDuty[k] || 0) + 1; });
-    $('#volbox').innerHTML = vs.length ? `<div class="note warn"><b>義工執事 ${vs.length} 位</b>（${Object.entries(byDuty).map(([k, v]) => esc(k) + ' ' + v).join('、')}）：預設一律<b>不排座位</b>；需要座位的人，在「身分／座位」欄選「義工（有座位）」。<br>供燈方式四種：<b>上台供燈</b>（入波次、沒座位）、<b>事前供燈</b>（不入波次，唱名）、<b>代供</b>（填代供人；代供人若是眷屬或新輸入的名字，會自動排座位並進波次）、<b>不供燈</b>（列在最後，不帶波次）。預設：有眷屬同行→眷屬代供；心燈／司儀／助唱→事前供燈；攝影／錄影→代供（請選代供人）；其他→上台供燈。
+    $('#volbox').innerHTML = vs.length ? `<div class="note warn"><b>義工執事 ${vs.length} 位</b>：預設<b>不排座位</b>；需要座位的人，在「身分／座位」欄選「義工（有座位）」。${tip(`執事分佈：${Object.entries(byDuty).map(([k, v]) => esc(k) + ' ' + v).join('、')}。<br>供燈方式四種：<b>上台供燈</b>（入波次、沒座位）、<b>事前供燈</b>（不入波次，唱名）、<b>代供</b>（填代供人；代供人若是眷屬或新輸入的名字，會自動排座位並進波次）、<b>不供燈</b>（列在最後，不帶波次）。預設：義工一律無座位、事前供燈；有眷屬或同戶的人一起來→留在原來的波次（眷屬同行→代供，攝影／錄影→代供請選代供人，其他→上台供燈），再由你選代供或自行供燈。`)}
       <div class="row"><label><input type="checkbox" id="ov" ${S.onlyVol ? 'checked' : ''}> 顯示義工執事及特殊關照</label></div></div>` : '';
     const ov = $('#ov'); if (ov) ov.onchange = () => { S.onlyVol = ov.checked; draw(); };
   };
@@ -1278,12 +1288,56 @@ function step3() {
     Object.values(S.edits || {}).forEach((ed) => { ['vol', 'mode', 'proxy', 'seatOnly', 'nw', 'er'].forEach((k) => delete ed[k]); }); // 性別、椅子是補資料，保留
     autoPlan(); S.assign = null; draw(); check(); volBox();
   };
+  /* 匯入供燈順序表：欄位的改動用跟畫面上手動改一樣的路徑（連動規則一致），波次與順序最後一次套上 */
+  const flash = (t, cls) => { const m = document.getElementById('mvmsg') || (() => { const e = document.createElement('div'); e.id = 'mvmsg'; $('#chk').before(e); return e; })(); m.className = 'note ' + (cls || 'ok'); m.textContent = t; clearTimeout(m._t); m._t = setTimeout(() => m.remove(), 12000); };
+  const applyOrder = (list) => {
+    if (S.assign && !confirm('匯入後，第 4 步的座位會依新的供燈順序重新排，你手動調過的座位位置會被取代（空位標記會保留）。\n\n如果要保留目前的座位紀錄，請按「取消」，先按頁首「💾 儲存調整紀錄」存檔，再匯入。\n\n要繼續匯入嗎？')) return;
+    save(); const keep = H.u.length;
+    const prevOnly = S.onlyVol; S.onlyVol = false; draw();
+    const rowOf = (n) => S.rows.findIndex((r) => r.name === n);
+    const fire = (n, sel, val) => { const i = rowOf(n); const el = i >= 0 && $('#tb3').querySelector(`tr[data-i="${i}"] ${sel}`); if (!el || el.disabled) return false; if (el.type === 'checkbox') el.checked = !!val; else el.value = val; el.dispatchEvent(new Event('change')); return true; };
+    const known = new Set(S.rows.map((r) => r.name));
+    const unknown = list.filter((x) => !known.has(x.name)).map((x) => x.name);
+    list.filter((x) => known.has(x.name)).forEach((x) => {
+      let r = S.rows[rowOf(x.name)];
+      if (x.gender && x.gender !== (r.gender || '') && fire(x.name, '[data-k="gender"]', x.gender)) { /* ok */ }
+      r = S.rows[rowOf(x.name)]; if (x.chair !== !!r.chair && fire(x.name, '[data-k="chair"]', x.chair)) { /* ok */ }
+      r = S.rows[rowOf(x.name)];
+      if (x.vol !== (r.vol || '') && !(r.kinOf && r.duty === '關照親眷' && !r.proxyFor)) { fire(x.name, '[data-k="vol"]', /入座|有座位/.test(x.vol) ? 'v_seat' : x.vol ? 'v_noseat' : ''); }
+      r = S.rows[rowOf(x.name)];
+      if (r && x.mode && x.mode !== (r.mode || '') && MODES.includes(x.mode) && fire(x.name, '[data-k="mode"]', x.mode)) { /* ok */ }
+      r = S.rows[rowOf(x.name)];
+      if (r && x.proxy !== (r.proxy || '') && fire(x.name, '[data-k="proxy"]', x.proxy)) { /* ok */ }
+    });
+    // 波次：以匯入檔為準（只動上台的人，同一戶一起）
+    const sheet = new Map(list.map((x) => [x.name, x]));
+    S.rows.forEach((r, i) => { if (r.attached) return; let e = i + 1; while (e < S.rows.length && S.rows[e].attached) e++; const m = S.rows.slice(i, e).map((q) => sheet.get(q.name)).find((q) => q && q.wave); if (!m) return; S.rows.slice(i, e).forEach((q) => { if (isUp(q) && q.wave !== m.wave) q.wave = m.wave; }); });
+    // 順序：整戶依匯入檔的先後排
+    const units = []; S.rows.forEach((r) => { if (r.attached && units.length) units[units.length - 1].push(r); else units.push([r]); });
+    const key = (u) => { const k = u.map((q) => (sheet.get(q.name) || {}).idx).filter((v) => v != null); return k.length ? Math.min(...k) : 1e9; };
+    const keyed = units.map((u, i) => ({ u, i, k: key(u) })); keyed.sort((a, b) => a.k - b.k || a.i - b.i);
+    S.rows = [].concat(...keyed.map((x) => x.u));
+    S.manualWave = true; syncProxies(); resortByWave(); compactWaves();
+    S.onlyVol = prevOnly; S.assign = null; H.u.length = Math.min(H.u.length, keep); H.r = []; updHist();
+    draw(); check(); volBox();
+    const exported = (r) => !(r.kinOf && r.noLamp && r.duty === '關照親眷' && !r.proxyFor && !r.selfLamp);
+    const absent = S.rows.filter((r) => exported(r) && !sheet.has(r.name)).map((r) => r.name);
+    const notes = [`已匯入供燈順序表（讀到 ${list.length} 位）。第 4 步的座位會依新順序重新排。`];
+    if (unknown.length) notes.push(`工具名單裡沒有這 ${unknown.length} 位，沒有加入：${unknown.join('、')}（要新增請回第 2 步）。`);
+    if (absent.length) notes.push(`匯入檔沒有這 ${absent.length} 位，維持原狀放在最後：${absent.join('、')}。`);
+    flash(notes.join(' '), unknown.length || absent.length ? 'warn' : 'ok');
+  };
+  $('#imp').onclick = () => $('#impf').click();
+  $('#impf').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { applyOrder(await readOrderSheet(f)); } catch (err) { flash('匯入失敗：' + (err.message || err), 'bad'); }
+  };
   draw(); check(); volBox(); updHist();
   bindNav(() => go(2), () => go(4));
 }
 async function exportOrder() {
   const wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('供燈順序表');
-  ws.addRow([`${S.event || ''} 供燈順序表（可在這裡改，改完回工具「匯入」。由上往下就是順序；功德項目空白＝同一戶）`]);
+  ws.addRow([`${S.event || ''} 供燈順序表（可在這裡改，改完回工具第 3 步「匯入供燈順序表」。換波次請改「波次」數字，同一波內由上往下就是順序；功德項目空白＝同一戶）`]);
   ws.addRow([]);
   const head = ws.addRow(['序', '波次', '功德項目', '姓名', '性別', '座位椅子', '義工', '供燈方式', '代供人', '備註']);
   head.font = { bold: true }; head.eachCell((c) => (c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1E6D6' } }));
@@ -1292,19 +1346,19 @@ async function exportOrder() {
   ws.views = [{ state: 'frozen', ySplit: 3 }];
   saveBlob(new Blob([await wb.xlsx.writeBuffer()]), `${fileBase()}供燈順序表.xlsx`);
 }
-async function importOrder(file) {
-  const wb = await readWb(file), ws = wb.getWorksheet('供燈順序表') || wb.worksheets[0];
-  const h = headerMap(ws, '序'); if (!h) throw new Error('找不到標題列（第一欄要是「序」）');
+/* 讀「供燈順序表」Excel（第 5 步「只下載供燈順序表」下載的那份，改完可在第 3 步匯入） */
+async function readOrderSheet(file) {
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
+  const ws = wb.getWorksheet('供燈順序表') || wb.worksheets[0];
+  const h = ws && findHeader(ws, ['序', '姓名']); if (!h) throw new Error('找不到標題列（要用第 5 步「只下載供燈順序表」下載的那份，第一欄是「序」、有「姓名」欄）');
   const g = (r, k) => (h.m[k] ? cell(ws, r, h.m[k]) : '');
-  const rows = []; let cat = '';
+  const out = [];
   for (let r = h.row + 1; r <= ws.rowCount; r++) {
-    const name = g(r, '姓名'); if (!name) continue;
-    const c = g(r, '功德項目'); if (c) cat = c;
-    const old = S.roster.find((x) => x.name === name) || {};
-    rows.push({ name, category: cat, attached: !c, gender: g(r, '性別'), chair: g(r, '座位椅子').toLowerCase() === 'v', vol: g(r, '義工'), mode: g(r, '供燈方式'), proxy: g(r, '代供人'), wave: +g(r, '波次') || null, auto: false, noLamp: /不上台供燈/.test(g(r, '備註')), duty: g(r, '備註').replace(/(、)?不上台供燈/, ''), note: old.note || '' });
+    const name = g(r, '姓名').replace(/\s/g, ''); if (!name) continue;
+    out.push({ name, wave: +g(r, '波次') || null, gender: g(r, '性別'), chair: g(r, '座位椅子').toLowerCase() === 'v', vol: g(r, '義工'), mode: g(r, '供燈方式'), proxy: g(r, '代供人'), idx: out.length });
   }
-  if (!rows.length) throw new Error('沒有讀到任何姓名');
-  S.rows = rows;
+  if (!out.length) throw new Error('沒有讀到任何姓名');
+  return out;
 }
 
 /* ---------------- step 4 ---------------- */
@@ -1344,7 +1398,7 @@ function autoReserveMale(layout, assign) {
   const be = rowsAfter('東', '黑靠背椅', lastOcc('東'));
   if (be.length) { got = take(be, 1); where = '東單黑椅'; }
   if (!got.length) { const wl = rowsAfter('西', '拜墊', lastOcc('西')); if (wl.length) { got = take(wl, 1); where = '西邊紫拜墊'; } }
-  return got.length ? `已預設留 1 排「男眾座位區」：${where}（${got.join('、')}）。要多留，把座位圖上方的「＋男眾座位」拖到空座位上；把男眾座位拖出座位圖＝刪除。` : '';
+  return got.length ? `已預設留 1 排「男眾座位區」：${where}（${got.join('、')}）。` : '';
 }
 function step4() {
   if (!S.layoutOpts.length) { go(1); return; }
@@ -1352,7 +1406,7 @@ function step4() {
   const total = S.seatLayout.length, used = Object.keys(S.assign).length, free = S.seatLayout.filter((s) => !S.assign[s.code] && !S.marks[s.code]).length;
   $('#main').innerHTML = `<div class="panel">
     <h2>第 4 步：排位與手動調整</h2>
-    <p class="how">已依供燈順序排好。「對調座位」：點一個有人的座位，再點另一個座位（空位＝移過去）。多出來的空位，切到「標記空位」再點座位，就能標成「男眾座位區」或「保留」，公告座位圖會顯示。</p>
+    <div class="how">已依供燈順序排好，可手動調整座位。${tip('「對調座位」：點一個有人的座位，再點另一個座位（空位＝移過去）。多出來的空位，切到「標記空位」再點座位，就能標成「男眾座位區」或「保留」，公告座位圖會顯示。')}</div>
     <div class="row"><label>佈場 <select id="lay">${optHtml(S.layoutOpts, S.layoutKey)}</select></label>
       <label><input type="radio" name="tool" value="swap" ${S.tool === 'swap' ? 'checked' : ''}> 對調座位</label>
       <label><input type="radio" name="tool" value="mark" ${S.tool === 'mark' ? 'checked' : ''}> 標記空位</label>
@@ -1363,7 +1417,7 @@ function step4() {
     <div id="wn"></div>
     <div class="legend">${Object.entries(TYPE_COLOR).map(([k, v]) => `<span style="background:${v}">${k}</span>`).join('')}<span style="background:#fff">其他</span></div>
     <div class="tabs" id="tabs"></div>
-    <div class="row" style="align-items:center"><span class="mchip" id="mchip" draggable="true" title="按住拖到空座位上，那一格就變成男眾座位區">＋ 男眾座位</span><span class="hint">按住拖到空座位＝加 1 個男眾座位區；把已標的男眾座位拖出座位圖外面＝刪除</span></div>
+    <div class="row" style="align-items:center"><span class="mchip" id="mchip" draggable="true" title="按住拖到空座位上，那一格就變成男眾座位區">＋ 男眾座位</span><span class="hint">拖到空座位＝加男眾座位區；拖出座位圖外＝刪除</span></div>
     <div class="chart" id="chart"></div>
     ${nav(true, '下一步：下載結果', true)}
   </div>`;
@@ -1446,7 +1500,7 @@ function drawChart() {
   if (hb) {
     if (S.tool === 'mark') { hb.className = 'swhint'; hb.textContent = '【標記空位】點空座位：依序切換「男眾座位區」→「保留」→ 取消。'; }
     else if (S.sel) { hb.className = 'swhint on'; const a = S.assign[S.sel]; hb.textContent = `已選 ${a ? a.name : S.marks[S.sel] || ''}（${S.sel}）→ 現在請點另一個座位：有人＝兩人對調，空位＝移過去${a ? '' : '（標記會搬到那一格）'}。再點同一格＝取消。`; }
-    else { hb.className = 'swhint'; hb.innerHTML = '💡 <b>換座位兩種方法：</b>①先點有人的座位，再點要換的座位（對方有人＝對調，空位＝移過去）　②直接用滑鼠把座位框拖到別的座位上放開。'; }
+    else { hb.className = 'swhint'; hb.innerHTML = '💡 點有人的座位，再點要換的座位；或直接拖曳座位框。'; }
   }
 }
 /* 把男眾座位區的標記拖出座位圖外面放開＝刪除 */
@@ -1516,7 +1570,7 @@ function step5() {
     <h2>第 5 步：下載結果</h2>
     <p class="how">下載一份 Excel，裡面有：供燈排序表、總座位圖、公告座位圖、給心燈版。貼回你自己維護的 Excel 即可。</p>
     <div class="row"><label>供燈排序表的表頭 <input type="text" id="hdr" value="${esc(orderHdr())}" size="14"> ${ORDER_TAIL}</label> <span class="hint">（例如：1151019晚場）</span></div>
-    <div class="row"><button class="primary" id="dlx">下載 Excel（${esc(fileBase())} 全部）</button><button id="dlo">只下載供燈順序表（可改後再匯入）</button></div>
+    <div class="row"><button class="primary" id="dlx">下載 Excel（${esc(fileBase())} 全部）</button><button id="dlo">只下載供燈順序表（可改後再匯入）</button>${tip('下載的是供燈順序這一頁。改完（波次、順序、義工、供燈方式、代供人…）可回第 3 步按「匯入供燈順序表」。匯入後座位會重排；要保留目前座位，請先按頁首「💾 儲存調整紀錄」。')}</div>
     ${auditNamesHtml()}
     <div class="note warn">關掉或重新整理頁面會清掉所有資料，下載後再離開。</div>
     <div class="nav"><div><button id="bk">← 回上一步調整</button></div><div></div></div>
